@@ -8,18 +8,16 @@ from .models import (
 )
 
 
-AUTHORITY = {
-    "POLICY": 100,
-    "ORGANIZATIONAL_STANDARD": 90,
-    "ARCHITECTURE_STANDARD": 80,
-    "APPROVED_SOP": 70,
-    "PROCESS_GUIDELINE": 60,
-    "SOP": 50,
-    "HISTORICAL_SOP": 30,
-}
-
-
 class KnowledgeBuilder:
+
+    def __init__(
+        self,
+        authority_config: dict,
+    ):
+
+        self.authority = (
+            authority_config
+        )
 
     def build(
         self,
@@ -29,80 +27,171 @@ class KnowledgeBuilder:
         units = []
 
         document_type = (
-            document.metadata.document_type
+            document.document_type
             or "UNKNOWN"
         ).upper()
 
-        authority = AUTHORITY.get(
-            document_type,
-            0,
+        authority = (
+            self.authority.get(
+                document_type,
+                0,
+            )
         )
 
-        for element in document.elements:
+        # --------------------------------
+        # Prefer semantic knowledge units
+        # --------------------------------
 
-            if not element.text:
+        for semantic_type, values in (
+            document.semantic.items()
+        ):
+
+            if not isinstance(
+                values,
+                list,
+            ):
                 continue
 
-            text = element.text.strip()
+            for item in values:
 
-            if len(text) < 20:
-                continue
+                if isinstance(
+                    item,
+                    dict,
+                ):
 
-            unit = KnowledgeUnit(
-                knowledge_unit_id=(
-                    "KU-"
-                    + uuid.uuid4()
-                    .hex[:12]
-                    .upper()
-                ),
+                    text = (
+                        item.get(
+                            "text"
+                        )
+                        or item.get(
+                            "statement"
+                        )
+                        or item.get(
+                            "definition"
+                        )
+                        or item.get(
+                            "activity"
+                        )
+                        or str(item)
+                    )
 
-                document_id=(
-                    document
-                    .metadata
-                    .document_id
-                ),
+                    evidence = (
+                        item.get(
+                            "evidence_element_ids",
+                            [],
+                        )
+                    )
 
-                element_ids=[
-                    element.element_id
-                ],
+                else:
 
-                knowledge_type=(
-                    element.semantic_type
-                    or "DOCUMENT_CONTENT"
-                ),
+                    text = str(
+                        item
+                    )
 
-                title=(
-                    text[:100]
-                ),
+                    evidence = []
 
-                text=text,
+                if not text.strip():
+                    continue
 
-                document_type=(
-                    document_type
-                ),
+                units.append(
+                    KnowledgeUnit(
+                        id=(
+                            "KU-"
+                            + uuid.uuid4()
+                            .hex[:12]
+                            .upper()
+                        ),
 
-                authority_level=(
-                    authority
-                ),
+                        document_id=(
+                            document
+                            .document_id
+                        ),
 
-                metadata={
-                    "page":
-                        element.page_number,
+                        title=(
+                            semantic_type
+                        ),
 
-                    "process":
-                        document
-                        .metadata
-                        .process,
+                        text=text,
 
-                    "application":
-                        document
-                        .metadata
-                        .application,
-                },
-            )
+                        source_element_ids=(
+                            evidence
+                        ),
 
-            units.append(unit)
+                        document_type=(
+                            document_type
+                        ),
 
-        document.knowledge_units = units
+                        authority=(
+                            authority
+                        ),
+
+                        metadata={
+                            "semantic_type":
+                                semantic_type
+                        },
+                    )
+                )
+
+        # --------------------------------
+        # Raw fallback
+        # --------------------------------
+
+        if not units:
+
+            for element in (
+                document.elements
+            ):
+
+                if not (
+                    element.text.strip()
+                ):
+                    continue
+
+                units.append(
+                    KnowledgeUnit(
+                        id=(
+                            "KU-"
+                            + uuid.uuid4()
+                            .hex[:12]
+                            .upper()
+                        ),
+
+                        document_id=(
+                            document
+                            .document_id
+                        ),
+
+                        title=(
+                            element.type
+                        ),
+
+                        text=(
+                            element.text
+                        ),
+
+                        source_element_ids=[
+                            element.element_id
+                        ],
+
+                        document_type=(
+                            document_type
+                        ),
+
+                        authority=(
+                            authority
+                        ),
+
+                        metadata={
+                            "page":
+                                element.page
+                        },
+                    )
+                )
+
+        document.metadata[
+            "knowledge_unit_count"
+        ] = len(
+            units
+        )
 
         return units
