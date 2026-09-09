@@ -1,1 +1,90 @@
+template:
 
+  font:
+    family: Arial
+
+  preserve:
+    first_page: true
+    header: true
+    footer: true
+    template_format: true
+    controlled_text: true
+
+  toc:
+    automatic: true
+
+  top_level_sections:
+    allow_new: false
+
+
+infographics:
+
+  EXECUTIVE_SUMMARY:
+    color: "#D2F2F7"
+
+  EXPLANATION:
+    color: "#00E47C"
+
+  ATTENTION:
+    color: "#F5CDB9"
+
+  KEY_TAKEAWAY:
+    color: "#FBF9AA"
+
+
+authority:
+
+  POLICY: 100
+
+  ORGANIZATIONAL_STANDARD: 90
+
+  ARCHITECTURE_STANDARD: 80
+
+  APPROVED_SOP: 70
+
+  PROCESS_GUIDELINE: 60
+
+  SOP: 50
+
+  HISTORICAL_SOP: 30
+
+
+generation_states:
+
+  - SOURCE_SUPPORTED
+
+  - REFERENCE_DERIVED
+
+  - CONFLICT
+
+  - SME_REQUIRED
+
+
+writing:
+
+  active_voice: true
+
+  mandatory_word:
+    must
+
+  recommendation_word:
+    should
+
+  avoid:
+    - please
+
+  preferred_replacements:
+
+    ensure:
+      - confirm
+      - verify
+
+
+genai:
+
+  human_review_required: true
+
+  source_provenance_required: true
+
+  unsupported_generation:
+    SME_REQUIRED
