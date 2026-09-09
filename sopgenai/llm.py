@@ -1,143 +1,566 @@
 from __future__ import annotations
 
 import json
+import os
 import re
-from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
 
-from huggingface_hub import InferenceClient
+from abc import (
+    ABC,
+    abstractmethod,
+)
+
+from typing import (
+    Any,
+    Dict,
+)
+
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 
 class LLMProvider(ABC):
-    """
-    Common interface used by the SOP application.
-
-    All semantic components should depend on this interface
-    rather than directly depending on Hugging Face.
-    """
 
     @abstractmethod
-    def structured_completion(
+    def json_completion(
         self,
         system_prompt: str,
-        payload: Dict[str, Any],
+        user_payload: Dict[str, Any],
     ) -> Dict[str, Any]:
+
         raise NotImplementedError
 
 
-class HuggingFaceLLM(LLMProvider):
-    """
-    Hugging Face Inference API implementation.
+def parse_json_response(
+    content: str,
+) -> Dict[str, Any]:
 
-    The model should be an instruction/chat model available
-    through the configured Hugging Face inference provider.
-    """
+    if not content:
+        raise ValueError(
+            "LLM returned an empty response."
+        )
+
+    content = (
+        content.strip()
+    )
+
+    content = re.sub(
+        r"^```(?:json)?\s*",
+        "",
+        content,
+        flags=re.IGNORECASE,
+    )
+
+    content = re.sub(
+        r"\s*```$",
+        "",
+        content,
+    )
+
+    try:
+
+        return json.loads(
+            content
+        )
+
+    except json.JSONDecodeError:
+
+        start = (
+            content.find("{")
+        )
+
+        end = (
+            content.rfind("}")
+        )
+
+        if (
+            start >= 0
+            and end > start
+        ):
+
+            candidate = (
+                content[
+                    start:end + 1
+                ]
+            )
+
+            return json.loads(
+                candidate
+            )
+
+        raise
+
+
+# =========================================================
+# HUGGING FACE
+# =========================================================
+
+
+class HuggingFaceProvider(
+    LLMProvider
+):
 
     def __init__(
         self,
-        model: str,
-        api_token: str,
-        provider: Optional[str] = None,
-        max_tokens: int = 4096,
-        temperature: float = 0.0,
+        config: dict,
     ):
-        if not api_token:
-            raise ValueError(
-                "Hugging Face API token is required."
+
+        from huggingface_hub import (
+            InferenceClient,
+        )
+
+        provider_config = (
+            config["huggingface"]
+        )
+
+        self.model = (
+            provider_config[
+                "model"
+            ]
+        )
+
+        inference_provider = (
+            provider_config.get(
+                "inference_provider",
+                "auto",
+            )
+        )
+
+        token_env = (
+            provider_config.get(
+                "api_key_env",
+                "HF_TOKEN",
+            )
+        )
+
+        token = os.getenv(
+            token_env
+        )
+
+        if not token:
+
+            raise RuntimeError(
+                f"Environment variable "
+                f"{token_env} is not set."
             )
 
-        self.model = model
-        self.max_tokens = max_tokens
-        self.temperature = temperature
-
-        client_args = {
-            "api_key": api_token,
-        }
-
-        if provider:
-            client_args["provider"] = provider
-
-        self.client = InferenceClient(
-            **client_args
+        self.temperature = (
+            config.get(
+                "temperature",
+                0.0,
+            )
         )
 
-    def structured_completion(
-        self,
-        system_prompt: str,
-        payload: Dict[str, Any],
-    ) -> Dict[str, Any]:
-
-        user_content = json.dumps(
-            payload,
-            ensure_ascii=False,
-            indent=2,
+        self.max_tokens = (
+            config.get(
+                "max_tokens",
+                8192,
+            )
         )
 
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    system_prompt
-                    + "\n\n"
-                    + "Return valid JSON only. "
-                    + "Do not include Markdown code fences."
+        self.client = (
+            InferenceClient(
+                model=self.model,
+                provider=(
+                    inference_provider
                 ),
-            },
-            {
-                "role": "user",
-                "content": user_content,
-            },
-        ]
+                token=token,
+                timeout=config.get(
+                    "timeout",
+                    180,
+                ),
+            )
+        )
 
-        completion = self.client.chat_completion(
-            model=self.model,
-            messages=messages,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(
+            min=1,
+            max=8,
+        ),
+    )
+    def json_completion(
+        self,
+        system_prompt,
+        user_payload,
+    ):
+
+        response = (
+            self.client
+            .chat_completion(
+                messages=[
+                    {
+                        "role":
+                            "system",
+
+                        "content": (
+                            system_prompt
+                            + "\n"
+                            + "Return valid JSON only. "
+                            + "Do not use Markdown."
+                        ),
+                    },
+                    {
+                        "role":
+                            "user",
+
+                        "content":
+                            json.dumps(
+                                user_payload,
+                                ensure_ascii=False,
+                            ),
+                    },
+                ],
+
+                max_tokens=(
+                    self.max_tokens
+                ),
+
+                temperature=(
+                    self.temperature
+                ),
+            )
         )
 
         content = (
-            completion.choices[0]
-            .message.content
+            response
+            .choices[0]
+            .message
+            .content
         )
 
-        return self._parse_json(content)
+        return parse_json_response(
+            content
+        )
 
-    @staticmethod
-    def _parse_json(
-        content: str,
-    ) -> Dict[str, Any]:
-        """
-        Parse JSON defensively because some instruction models
-        may wrap JSON in ```json ... ``` despite instructions.
-        """
 
-        if not content:
-            raise ValueError(
-                "Hugging Face model returned an empty response."
+# =========================================================
+# OPENAI
+# =========================================================
+
+
+class OpenAIProvider(
+    LLMProvider
+):
+
+    def __init__(
+        self,
+        config: dict,
+    ):
+
+        from openai import OpenAI
+
+        provider_config = (
+            config["openai"]
+        )
+
+        token_env = (
+            provider_config.get(
+                "api_key_env",
+                "OPENAI_API_KEY",
+            )
+        )
+
+        token = os.getenv(
+            token_env
+        )
+
+        if not token:
+
+            raise RuntimeError(
+                f"Environment variable "
+                f"{token_env} is not set."
             )
 
-        content = content.strip()
-
-        # Remove Markdown code fences when returned by model.
-        content = re.sub(
-            r"^```(?:json)?\s*",
-            "",
-            content,
-            flags=re.IGNORECASE,
+        self.model = (
+            provider_config[
+                "model"
+            ]
         )
 
-        content = re.sub(
-            r"\s*```$",
-            "",
-            content,
+        self.temperature = (
+            config.get(
+                "temperature",
+                0.0,
+            )
         )
 
-        try:
-            return json.loads(content)
+        self.max_tokens = (
+            config.get(
+                "max_tokens",
+                8192,
+            )
+        )
 
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                "Hugging Face model did not return valid JSON.\n"
-                f"Response:\n{content}"
-            ) from exc
+        arguments = {
+            "api_key":
+                token
+        }
+
+        base_url = (
+            provider_config.get(
+                "base_url"
+            )
+        )
+
+        if base_url:
+
+            arguments[
+                "base_url"
+            ] = base_url
+
+        self.client = OpenAI(
+            **arguments
+        )
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(
+            min=1,
+            max=8,
+        ),
+    )
+    def json_completion(
+        self,
+        system_prompt,
+        user_payload,
+    ):
+
+        response = (
+            self.client
+            .chat
+            .completions
+            .create(
+                model=self.model,
+
+                messages=[
+                    {
+                        "role":
+                            "system",
+
+                        "content": (
+                            system_prompt
+                            + "\n"
+                            + "Return valid JSON only."
+                        ),
+                    },
+                    {
+                        "role":
+                            "user",
+
+                        "content":
+                            json.dumps(
+                                user_payload,
+                                ensure_ascii=False,
+                            ),
+                    },
+                ],
+
+                temperature=(
+                    self.temperature
+                ),
+
+                max_tokens=(
+                    self.max_tokens
+                ),
+
+                response_format={
+                    "type":
+                        "json_object"
+                },
+            )
+        )
+
+        return parse_json_response(
+            response
+            .choices[0]
+            .message
+            .content
+        )
+
+
+# =========================================================
+# ANTHROPIC
+# =========================================================
+
+
+class AnthropicProvider(
+    LLMProvider
+):
+
+    def __init__(
+        self,
+        config: dict,
+    ):
+
+        import anthropic
+
+        provider_config = (
+            config["anthropic"]
+        )
+
+        token_env = (
+            provider_config.get(
+                "api_key_env",
+                "ANTHROPIC_API_KEY",
+            )
+        )
+
+        token = os.getenv(
+            token_env
+        )
+
+        if not token:
+
+            raise RuntimeError(
+                f"Environment variable "
+                f"{token_env} is not set."
+            )
+
+        self.model = (
+            provider_config[
+                "model"
+            ]
+        )
+
+        self.temperature = (
+            config.get(
+                "temperature",
+                0.0,
+            )
+        )
+
+        self.max_tokens = (
+            config.get(
+                "max_tokens",
+                8192,
+            )
+        )
+
+        self.client = (
+            anthropic.Anthropic(
+                api_key=token
+            )
+        )
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(
+            min=1,
+            max=8,
+        ),
+    )
+    def json_completion(
+        self,
+        system_prompt,
+        user_payload,
+    ):
+
+        response = (
+            self.client
+            .messages
+            .create(
+                model=self.model,
+
+                system=(
+                    system_prompt
+                    + "\n"
+                    + "Return valid JSON only. "
+                    + "Do not use Markdown."
+                ),
+
+                messages=[
+                    {
+                        "role":
+                            "user",
+
+                        "content":
+                            json.dumps(
+                                user_payload,
+                                ensure_ascii=False,
+                            ),
+                    }
+                ],
+
+                max_tokens=(
+                    self.max_tokens
+                ),
+
+                temperature=(
+                    self.temperature
+                ),
+            )
+        )
+
+        content = ""
+
+        for block in (
+            response.content
+        ):
+
+            if hasattr(
+                block,
+                "text",
+            ):
+                content += (
+                    block.text
+                )
+
+        return parse_json_response(
+            content
+        )
+
+
+# =========================================================
+# FACTORY
+# =========================================================
+
+
+class LLMFactory:
+
+    @staticmethod
+    def create(
+        config: dict,
+    ) -> LLMProvider:
+
+        provider = (
+            config.get(
+                "provider",
+                "",
+            )
+            .strip()
+            .lower()
+        )
+
+        if provider == "huggingface":
+
+            return (
+                HuggingFaceProvider(
+                    config
+                )
+            )
+
+        if provider == "openai":
+
+            return (
+                OpenAIProvider(
+                    config
+                )
+            )
+
+        if provider == "anthropic":
+
+            return (
+                AnthropicProvider(
+                    config
+                )
+            )
+
+        raise ValueError(
+            "Unsupported LLM provider: "
+            f"{provider}. "
+            "Supported providers are "
+            "huggingface, openai and anthropic."
+        )
