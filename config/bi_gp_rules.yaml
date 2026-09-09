@@ -1,7 +1,7 @@
 template:
 
   font:
-    family: Arial
+    family: "Arial"
 
   preserve:
     first_page: true
@@ -15,6 +15,50 @@ template:
 
   top_level_sections:
     allow_new: false
+
+
+sections:
+
+  - id: "1"
+    title: "PURPOSE"
+    required: true
+
+  - id: "2"
+    title: "APPLICABILITY"
+    required: true
+
+  - id: "3"
+    title: "DEFINITIONS & ABBREVIATIONS"
+    required: true
+
+  - id: "4"
+    title: "IMPLEMENTATION AND/OR PRE-REQUISITES"
+    required: true
+
+  - id: "5"
+    title: "ROLES & RESPONSIBILITIES"
+    required: true
+
+  - id: "6"
+    title: "PROCESS"
+    required: true
+    allow_subsections: true
+
+  - id: "7"
+    title: "ASSOCIATED DOCUMENTS"
+    required: true
+
+  - id: "8"
+    title: "REFERENCES"
+    required: true
+
+  - id: "9"
+    title: "DISTRIBUTION OF CONTROLLED PRINTS/COPIES"
+    required: false
+
+  - id: "10"
+    title: "DOCUMENT HISTORY"
+    required: true
 
 
 infographics:
@@ -32,59 +76,39 @@ infographics:
     color: "#FBF9AA"
 
 
-authority:
-
-  POLICY: 100
-
-  ORGANIZATIONAL_STANDARD: 90
-
-  ARCHITECTURE_STANDARD: 80
-
-  APPROVED_SOP: 70
-
-  PROCESS_GUIDELINE: 60
-
-  SOP: 50
-
-  HISTORICAL_SOP: 30
-
-
-generation_states:
-
-  - SOURCE_SUPPORTED
-
-  - REFERENCE_DERIVED
-
-  - CONFLICT
-
-  - SME_REQUIRED
-
-
 writing:
 
   active_voice: true
 
-  mandatory_word:
-    must
+  mandatory_word: "must"
 
-  recommendation_word:
-    should
+  recommendation_word: "should"
 
   avoid:
-    - please
+    - "please"
 
   preferred_replacements:
 
     ensure:
-      - confirm
-      - verify
+      - "confirm"
+      - "verify"
 
 
-genai:
+generation_states:
+
+  - "SOURCE_SUPPORTED"
+
+  - "REFERENCE_DERIVED"
+
+  - "CONFLICT"
+
+  - "SME_REQUIRED"
+
+
+ai:
 
   human_review_required: true
 
-  source_provenance_required: true
+  provenance_required: true
 
-  unsupported_generation:
-    SME_REQUIRED
+  unsupported_content: "SME_REQUIRED"
