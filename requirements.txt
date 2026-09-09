@@ -1,17 +1,20 @@
 PyMuPDF>=1.24
-pypdf>=4.2
+pypdf>=5.0
 pdfplumber>=0.11
-pytesseract>=0.3.10
-Pillow>=10.3
+Pillow>=10.0
+pytesseract>=0.3.13
 
-python-docx>=1.1.2
-
-pydantic>=2.7
+python-docx>=1.1
 PyYAML>=6.0
-
-sentence-transformers>=3.0
-faiss-cpu>=1.8
-rank-bm25>=0.2.2
+pydantic>=2.7
 numpy>=1.26
 
+rank-bm25>=0.2.2
+sentence-transformers>=3.0
+faiss-cpu>=1.8
+
+huggingface_hub>=0.34
 openai>=1.40
+anthropic>=0.40
+
+tenacity>=8.2
