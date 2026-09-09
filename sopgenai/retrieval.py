@@ -1,100 +1,162 @@
 from __future__ import annotations
 
-import numpy as np
 import faiss
+import numpy as np
 
-from rank_bm25 import BM25Okapi
+from rank_bm25 import (
+    BM25Okapi,
+)
 
 from sentence_transformers import (
     SentenceTransformer,
 )
 
-from .models import KnowledgeUnit
+from .models import (
+    KnowledgeUnit,
+)
 
 
 class HybridRetriever:
 
     def __init__(
         self,
-        embedding_model=(
-            "sentence-transformers/"
-            "all-MiniLM-L6-v2"
-        ),
+        embedding_config: dict,
+        retrieval_config: dict,
     ):
 
-        self.model = (
+        self.embedding_config = (
+            embedding_config
+        )
+
+        self.config = (
+            retrieval_config
+        )
+
+        model_name = (
+            embedding_config[
+                "model"
+            ]
+        )
+
+        self.encoder = (
             SentenceTransformer(
-                embedding_model
+                model_name
             )
         )
 
         self.units = []
 
-        self.index = None
-
-        self.embeddings = None
+        self.faiss_index = None
 
         self.bm25 = None
 
-    def index_documents(
+    def index(
         self,
-        units: list[KnowledgeUnit],
+        units: list[
+            KnowledgeUnit
+        ],
     ):
 
-        self.units = units
+        self.units = (
+            units
+        )
+
+        if not units:
+            return
 
         texts = [
-            f"{unit.title} {unit.text}"
-            for unit in units
+            (
+                unit.title
+                + "\n"
+                + unit.text
+            )
+            for unit
+            in units
         ]
 
-        embeddings = (
-            self.model.encode(
-                texts,
-                normalize_embeddings=True,
+        tokenized = [
+            text.lower().split()
+            for text
+            in texts
+        ]
+
+        self.bm25 = (
+            BM25Okapi(
+                tokenized
             )
         )
 
-        embeddings = np.asarray(
-            embeddings,
-            dtype="float32",
+        embeddings = (
+            self.encoder.encode(
+                texts,
+
+                normalize_embeddings=(
+                    self
+                    .embedding_config
+                    .get(
+                        "normalize_embeddings",
+                        True,
+                    )
+                ),
+            )
         )
 
-        self.embeddings = embeddings
+        embeddings = (
+            np.asarray(
+                embeddings,
+                dtype="float32",
+            )
+        )
 
         dimension = (
             embeddings.shape[1]
         )
 
-        self.index = (
+        self.faiss_index = (
             faiss.IndexFlatIP(
                 dimension
             )
         )
 
-        self.index.add(
+        self.faiss_index.add(
             embeddings
-        )
-
-        tokenized = [
-            text.lower().split()
-            for text in texts
-        ]
-
-        self.bm25 = BM25Okapi(
-            tokenized
         )
 
     def search(
         self,
-        query,
-        top_k=10,
+        query: str,
+        top_k: int | None = None,
     ):
 
+        if not self.units:
+            return []
+
+        top_k = (
+            top_k
+            or self.config.get(
+                "top_k",
+                8,
+            )
+        )
+
+        multiplier = (
+            self.config.get(
+                "candidate_multiplier",
+                4,
+            )
+        )
+
         query_embedding = (
-            self.model.encode(
+            self.encoder.encode(
                 [query],
-                normalize_embeddings=True,
+                normalize_embeddings=(
+                    self
+                    .embedding_config
+                    .get(
+                        "normalize_embeddings",
+                        True,
+                    )
+                ),
             )
         )
 
@@ -105,76 +167,122 @@ class HybridRetriever:
             )
         )
 
-        vector_scores, vector_ids = (
-            self.index.search(
+        dense_scores = np.zeros(
+            len(self.units),
+            dtype=float,
+        )
+
+        candidate_count = min(
+            len(self.units),
+            max(
+                top_k * multiplier,
+                top_k,
+            ),
+        )
+
+        scores, indexes = (
+            self.faiss_index.search(
                 query_embedding,
-                min(
-                    len(self.units),
-                    top_k * 3,
-                ),
+                candidate_count,
             )
         )
 
-        bm25_scores = (
-            self.bm25.get_scores(
-                query.lower().split()
+        for score, index in zip(
+            scores[0],
+            indexes[0],
+        ):
+
+            if index >= 0:
+
+                dense_scores[
+                    index
+                ] = float(
+                    score
+                )
+
+        sparse_scores = (
+            self.bm25
+            .get_scores(
+                query
+                .lower()
+                .split()
             )
         )
 
-        scores = {}
-
-        for score, idx in zip(
-            vector_scores[0],
-            vector_ids[0],
+        if (
+            len(sparse_scores)
+            and sparse_scores.max()
+            > 0
         ):
 
-            if idx < 0:
-                continue
-
-            scores[idx] = (
-                scores.get(idx, 0)
-                + float(score) * 0.55
+            sparse_scores = (
+                sparse_scores
+                / (
+                    sparse_scores.max()
+                    + 1e-9
+                )
             )
 
-        max_bm25 = max(
-            bm25_scores
-        ) if len(bm25_scores) else 1
+        vector_weight = (
+            self.config.get(
+                "vector_weight",
+                0.45,
+            )
+        )
 
-        for idx, score in enumerate(
-            bm25_scores
+        keyword_weight = (
+            self.config.get(
+                "keyword_weight",
+                0.35,
+            )
+        )
+
+        authority_weight = (
+            self.config.get(
+                "authority_weight",
+                0.20,
+            )
+        )
+
+        results = []
+
+        for index, unit in enumerate(
+            self.units
         ):
 
-            normalized = (
-                score / max_bm25
-                if max_bm25
-                else 0
+            authority_score = (
+                unit.authority
+                / 100.0
             )
 
-            scores[idx] = (
-                scores.get(idx, 0)
-                + normalized * 0.30
+            final_score = (
+                vector_weight
+                * dense_scores[index]
+
+                + keyword_weight
+                * float(
+                    sparse_scores[
+                        index
+                    ]
+                )
+
+                + authority_weight
+                * authority_score
             )
 
-        for idx in scores:
-
-            authority = (
-                self.units[idx]
-                .authority_level
-                / 100
+            results.append(
+                (
+                    final_score,
+                    unit,
+                )
             )
 
-            scores[idx] += (
-                authority * 0.15
-            )
-
-        ranked = sorted(
-            scores.items(),
-            key=lambda item: item[1],
+        results.sort(
+            key=lambda item:
+                item[0],
             reverse=True,
         )
 
-        return [
-            self.units[idx]
-            for idx, _
-            in ranked[:top_k]
-        ]
+        return (
+            results[:top_k]
+        )
