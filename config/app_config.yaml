@@ -1,0 +1,188 @@
+application:
+  name: "SOP GenAI Migration Platform"
+  version: "3.0"
+
+# ==========================================================
+# LLM CONFIGURATION
+# ==========================================================
+
+llm:
+
+  # Change this value to:
+  #
+  # huggingface
+  # openai
+  # anthropic
+
+  provider: "huggingface"
+
+  temperature: 0.0
+  max_tokens: 8192
+  timeout: 180
+
+  # --------------------------------------------------------
+  # Hugging Face
+  # --------------------------------------------------------
+
+  huggingface:
+
+    # Example:
+    # zai-org/GLM-5.2
+
+    model: "zai-org/GLM-5.2"
+
+    # Hugging Face inference provider.
+    #
+    # Can also be "auto" if appropriate for your environment.
+
+    inference_provider: "zai-org"
+
+    api_key_env: "HF_TOKEN"
+
+  # --------------------------------------------------------
+  # OpenAI
+  # --------------------------------------------------------
+
+  openai:
+
+    # Put the approved model name here.
+
+    model: "YOUR_OPENAI_MODEL"
+
+    api_key_env: "OPENAI_API_KEY"
+
+    # Leave null for standard OpenAI endpoint.
+    # Can also point to an OpenAI-compatible endpoint.
+
+    base_url: null
+
+  # --------------------------------------------------------
+  # Anthropic
+  # --------------------------------------------------------
+
+  anthropic:
+
+    # Put the approved Claude model name here.
+
+    model: "YOUR_ANTHROPIC_MODEL"
+
+    api_key_env: "ANTHROPIC_API_KEY"
+
+
+# ==========================================================
+# DOCUMENT EXTRACTION
+# ==========================================================
+
+extraction:
+
+  pdf:
+
+    primary_parser: "pymupdf"
+
+    table_parser: "pdfplumber"
+
+    metadata_parser: "pypdf"
+
+    ocr:
+      enabled: true
+
+      engine: "tesseract"
+
+      dpi: 300
+
+      minimum_native_characters: 40
+
+      minimum_confidence: 40
+
+
+# ==========================================================
+# EMBEDDINGS
+# ==========================================================
+
+embedding:
+
+  provider: "sentence_transformers"
+
+  model: "sentence-transformers/all-MiniLM-L6-v2"
+
+  normalize_embeddings: true
+
+
+# ==========================================================
+# RETRIEVAL
+# ==========================================================
+
+retrieval:
+
+  top_k: 8
+
+  candidate_multiplier: 4
+
+  vector_weight: 0.45
+
+  keyword_weight: 0.35
+
+  authority_weight: 0.20
+
+
+# ==========================================================
+# DOCUMENT AUTHORITY
+# ==========================================================
+
+authority:
+
+  POLICY: 100
+
+  ORGANIZATIONAL_STANDARD: 90
+
+  ARCHITECTURE_STANDARD: 80
+
+  APPROVED_SOP: 70
+
+  PROCESS_GUIDELINE: 60
+
+  GUIDANCE: 60
+
+  SOP: 50
+
+  HISTORICAL_SOP: 30
+
+  UNKNOWN: 0
+
+
+# ==========================================================
+# GENERATION
+# ==========================================================
+
+generation:
+
+  require_provenance: true
+
+  allow_unsupported_content: false
+
+  unsupported_state: "SME_REQUIRED"
+
+  human_review_required: true
+
+
+# ==========================================================
+# OUTPUT
+# ==========================================================
+
+output:
+
+  save_source_structure: true
+
+  save_template_structure: true
+
+  save_semantic_content: true
+
+  save_knowledge_units: true
+
+  save_retrieval_results: true
+
+  save_mapping: true
+
+  save_validation_report: true
+
+  generate_docx: true
