@@ -1,30 +1,40 @@
-from pathlib import Path
+from __future__ import annotations
+
 import hashlib
 import uuid
+
+from pathlib import Path
 
 from docx import Document
 
 from .models import (
     CanonicalDocument,
-    DocumentElement,
-    DocumentMetadata,
-    TextSpan,
+    Element,
+    TextRun,
 )
 
 
-def sha256(path):
+def sha256(
+    path: Path,
+):
 
-    h = hashlib.sha256()
+    digest = hashlib.sha256()
 
-    with open(path, "rb") as f:
+    with path.open(
+        "rb"
+    ) as file:
 
         for chunk in iter(
-            lambda: f.read(1024 * 1024),
+            lambda: file.read(
+                1024 * 1024
+            ),
             b"",
         ):
-            h.update(chunk)
+            digest.update(
+                chunk
+            )
 
-    return h.hexdigest()
+    return digest.hexdigest()
 
 
 class DOCXExtractor:
@@ -32,42 +42,70 @@ class DOCXExtractor:
     def extract(
         self,
         path: Path,
-        document_type="TEMPLATE",
+        document_type: str | None = None,
     ):
 
-        doc = Document(str(path))
-
-        document_id = (
-            f"DOC-{uuid.uuid4().hex[:12].upper()}"
+        document = Document(
+            str(path)
         )
 
         elements = []
 
-        counter = 0
+        order = 0
 
-        for paragraph in doc.paragraphs:
+        # ----------------------------
+        # Paragraphs
+        # ----------------------------
 
-            text = paragraph.text.strip()
+        for paragraph in (
+            document.paragraphs
+        ):
+
+            text = (
+                paragraph.text.strip()
+            )
 
             if not text:
                 continue
 
-            counter += 1
+            order += 1
 
-            spans = []
+            runs = []
 
-            for run in paragraph.runs:
+            for run in (
+                paragraph.runs
+            ):
 
-                spans.append(
-                    TextSpan(
+                color = None
+
+                if (
+                    run.font.color
+                    and run.font.color.rgb
+                ):
+                    color = (
+                        f"#{run.font.color.rgb}"
+                    )
+
+                runs.append(
+                    TextRun(
                         text=run.text,
-                        font=run.font.name,
+
+                        font=(
+                            run.font.name
+                        ),
+
                         size=(
                             run.font.size.pt
                             if run.font.size
                             else None
                         ),
-                        bold=bool(run.bold),
+
+                        color=color,
+
+                        bold=bool(
+                            run.bold
+                        ),
+
                         italic=bool(
                             run.italic
                         ),
@@ -75,34 +113,112 @@ class DOCXExtractor:
                 )
 
             elements.append(
-                DocumentElement(
+                Element(
                     element_id=(
-                        f"EL-{counter:06d}"
+                        f"DOCX-TXT-"
+                        f"{order:06d}"
                     ),
-                    type="paragraph",
-                    order=counter,
+
+                    type="text",
+
+                    page=0,
+
+                    order=order,
+
                     text=text,
-                    spans=spans,
-                    style_ref=(
-                        paragraph.style.name
-                        if paragraph.style
-                        else None
+
+                    runs=runs,
+
+                    metadata={
+                        "style": (
+                            paragraph
+                            .style
+                            .name
+                            if paragraph.style
+                            else None
+                        )
+                    },
+
+                    provenance={
+                        "extractor":
+                            "python-docx"
+                    },
+                )
+            )
+
+        # ----------------------------
+        # Tables
+        # ----------------------------
+
+        for table_index, table in enumerate(
+            document.tables,
+            start=1,
+        ):
+
+            order += 1
+
+            rows = [
+                [
+                    cell.text.strip()
+                    for cell
+                    in row.cells
+                ]
+                for row
+                in table.rows
+            ]
+
+            elements.append(
+                Element(
+                    element_id=(
+                        f"DOCX-TABLE-"
+                        f"{table_index:03d}"
                     ),
-                    extraction_method=(
-                        "python-docx"
+
+                    type="table",
+
+                    page=0,
+
+                    order=order,
+
+                    text="\n".join(
+                        " | ".join(
+                            row
+                        )
+                        for row
+                        in rows
                     ),
+
+                    metadata={
+                        "rows":
+                            rows
+                    },
+
+                    provenance={
+                        "extractor":
+                            "python-docx"
+                    },
                 )
             )
 
         return CanonicalDocument(
-            metadata=DocumentMetadata(
-                document_id=document_id,
-                file_name=path.name,
-                file_type="docx",
-                document_type=(
-                    document_type
-                ),
-                file_hash=sha256(path),
+            document_id=(
+                "DOC-"
+                + uuid.uuid4()
+                .hex[:12]
+                .upper()
             ),
+
+            source_file=(
+                path.name
+            ),
+
+            source_sha256=(
+                sha256(path)
+            ),
+
+            document_type=(
+                document_type
+            ),
+
             elements=elements,
         )
