@@ -1,33 +1,62 @@
 from __future__ import annotations
 
-from .llm import LLMProvider
-from .models import CanonicalDocument
+from .llm import (
+    LLMProvider,
+)
+
+from .models import (
+    CanonicalDocument,
+)
 
 
 SYSTEM_PROMPT = """
-You are an enterprise SOP document-analysis engine.
+You are an enterprise controlled-document analysis engine.
 
-Extract semantic information only from the supplied
-document evidence.
+Analyze only the supplied source evidence.
 
 Do not invent missing information.
 
 Identify:
 
-1. purpose
-2. applicability
-3. roles and responsibilities
-4. process steps
-5. prerequisites
-6. mandatory requirements
-7. definitions and abbreviations
-8. references
-9. warnings or attention items
-10. conflicts or ambiguous statements
+- purpose
+- applicability
+- definitions
+- abbreviations
+- prerequisites
+- roles
+- responsibilities
+- process steps
+- mandatory requirements
+- recommendations
+- references
+- associated documents
+- systems/applications
+- warnings
+- attention items
+- conflicts
+- ambiguities
 
-Every extracted item must contain source element IDs.
+Every semantic item must include evidence_element_ids.
 
-Return JSON only.
+If evidence is insufficient, do not infer the answer.
+
+Return JSON with these top-level arrays:
+
+purpose
+applicability
+definitions
+abbreviations
+prerequisites
+roles
+responsibilities
+process_steps
+requirements
+recommendations
+references
+associated_documents
+systems
+warnings
+conflicts
 """
 
 
@@ -45,45 +74,51 @@ class SemanticEnricher:
         document: CanonicalDocument,
     ):
 
-        evidence = []
+        elements = [
+            {
+                "element_id":
+                    element.element_id,
 
-        for element in document.elements:
+                "page":
+                    element.page,
 
-            evidence.append(
-                {
-                    "element_id":
-                        element.element_id,
+                "type":
+                    element.type,
 
-                    "page":
-                        element.page_number,
-
-                    "text":
-                        element.text,
-                }
-            )
+                "text":
+                    element.text,
+            }
+            for element
+            in document.elements
+            if element.text.strip()
+        ]
 
         payload = {
             "document": {
                 "document_id":
-                    document.metadata.document_id,
+                    document.document_id,
 
                 "document_type":
-                    document.metadata.document_type,
+                    document.document_type,
+
+                "source_file":
+                    document.source_file,
             },
 
-            "elements": evidence,
+            "elements":
+                elements,
         }
 
         result = (
             self.llm
-            .structured_completion(
+            .json_completion(
                 SYSTEM_PROMPT,
                 payload,
             )
         )
 
-        document.extraction_metadata[
-            "semantic_enrichment"
-        ] = result
+        document.semantic = (
+            result
+        )
 
         return result
