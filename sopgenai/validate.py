@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from .models import (
+    Mapping,
+)
 
-MANDATORY = {
+
+REQUIRED_SECTIONS = {
     "1",
     "2",
     "3",
@@ -14,81 +18,172 @@ MANDATORY = {
 }
 
 
-class DeterministicValidator:
+ALLOWED_STATES = {
+    "SOURCE_SUPPORTED",
+    "REFERENCE_DERIVED",
+    "CONFLICT",
+    "SME_REQUIRED",
+}
+
+
+class Validator:
 
     def validate(
         self,
-        mapping,
+        mappings: list[
+            Mapping
+        ],
     ):
 
         issues = []
 
-        mappings = mapping.get(
-            "mappings",
-            []
-        )
-
-        available = {
-            str(item.get(
-                "target_section_id"
-            ))
-            for item in mappings
+        populated = {
+            mapping.target_id
+            for mapping
+            in mappings
+            if (
+                mapping
+                .transformed_content
+                .strip()
+            )
         }
 
-        for required in MANDATORY:
+        # --------------------------------
+        # Required sections
+        # --------------------------------
 
-            if required not in available:
+        for section_id in sorted(
+            REQUIRED_SECTIONS
+            - populated
+        ):
 
-                issues.append(
-                    {
-                        "rule":
-                            "MANDATORY_SECTION",
+            issues.append(
+                {
+                    "severity":
+                        "WARNING",
 
-                        "severity":
-                            "ERROR",
+                    "rule":
+                        "MISSING_SECTION",
 
-                        "section":
-                            required,
+                    "section":
+                        section_id,
 
-                        "message":
-                            "Mandatory template "
-                            "section has no mapping.",
-                    }
-                )
+                    "message":
+                        "Required template "
+                        "section has no "
+                        "generated content.",
 
-        for item in mappings:
+                    "requires_review":
+                        True,
+                }
+            )
+
+        # --------------------------------
+        # Mapping validation
+        # --------------------------------
+
+        for mapping in mappings:
 
             if (
-                item.get(
-                    "generation_state"
-                )
-                == "AI_INFERRED"
+                mapping.state
+                not in ALLOWED_STATES
             ):
 
                 issues.append(
                     {
-                        "rule":
-                            "AI_INFERENCE",
-
                         "severity":
-                            "REVIEW",
+                            "ERROR",
+
+                        "rule":
+                            "INVALID_STATE",
 
                         "section":
-                            item.get(
-                                "target_section_id"
-                            ),
+                            mapping.target_id,
 
                         "message":
-                            "AI-inferred content "
-                            "requires SME review.",
+                            "Invalid generation "
+                            "state.",
+
+                        "requires_review":
+                            True,
                     }
                 )
 
-        return {
-            "passed": not any(
-                x["severity"] == "ERROR"
-                for x in issues
-            ),
+            if mapping.state in {
+                "CONFLICT",
+                "SME_REQUIRED",
+            }:
 
-            "issues": issues,
+                issues.append(
+                    {
+                        "severity":
+                            "WARNING",
+
+                        "rule":
+                            mapping.state,
+
+                        "section":
+                            mapping.target_id,
+
+                        "message":
+                            "Human review "
+                            "is required.",
+
+                        "requires_review":
+                            True,
+                    }
+                )
+
+            if (
+                mapping.state
+                in {
+                    "SOURCE_SUPPORTED",
+                    "REFERENCE_DERIVED",
+                }
+                and not (
+                    mapping
+                    .source_element_ids
+                    or mapping.evidence
+                )
+            ):
+
+                issues.append(
+                    {
+                        "severity":
+                            "ERROR",
+
+                        "rule":
+                            "MISSING_PROVENANCE",
+
+                        "section":
+                            mapping.target_id,
+
+                        "message":
+                            "Generated content "
+                            "does not contain "
+                            "source provenance.",
+
+                        "requires_review":
+                            True,
+                    }
+                )
+
+        passed = not any(
+            issue[
+                "severity"
+            ]
+            == "ERROR"
+            for issue
+            in issues
+        )
+
+        return {
+            "passed":
+                passed,
+
+            "human_review_required":
+                True,
+
+            "issues":
+                issues,
         }
