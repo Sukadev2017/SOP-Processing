@@ -1,26 +1,53 @@
+from __future__ import annotations
+
 import argparse
-import os
 
 from pathlib import Path
 
-from sopgenai.llm import HuggingFaceLLM
-from sopgenai.pipeline import SOPPipeline
+from sopgenai.config import (
+    Configuration,
+)
+
+from sopgenai.pipeline import (
+    SOPPipeline,
+)
 
 
 def arguments():
 
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description=(
+            "Enterprise GenAI SOP "
+            "Migration Platform"
+        )
+    )
 
     parser.add_argument(
         "--source",
         required=True,
-        help="Source SOP PDF",
+        help=(
+            "Source SOP PDF or DOCX"
+        ),
     )
 
     parser.add_argument(
         "--template",
         required=True,
-        help="Target SOP DOCX template",
+        help=(
+            "Target GP DOCX template"
+        ),
+    )
+
+    parser.add_argument(
+        "--knowledge",
+        nargs="*",
+        default=[],
+        help=(
+            "Policies, standards, "
+            "guidelines, glossaries, "
+            "architecture documents and "
+            "approved SOPs"
+        ),
     )
 
     parser.add_argument(
@@ -29,9 +56,17 @@ def arguments():
     )
 
     parser.add_argument(
-        "--model",
-        required=True,
-        help="Hugging Face model ID",
+        "--config",
+        default=(
+            "./config/app_config.yaml"
+        ),
+    )
+
+    parser.add_argument(
+        "--rules",
+        default=(
+            "./config/bi_gp_rules.yaml"
+        ),
     )
 
     return parser.parse_args()
@@ -41,47 +76,69 @@ def main():
 
     args = arguments()
 
-    hf_token = os.environ.get(
-        "HF_TOKEN"
-    )
+    configuration = (
+        Configuration(
+            app_config_path=Path(
+                args.config
+            ),
 
-    if not hf_token:
-        raise RuntimeError(
-            "Set the HF_TOKEN environment variable."
+            rules_config_path=Path(
+                args.rules
+            ),
         )
-
-    llm = HuggingFaceLLM(
-        model=args.model,
-        api_token=hf_token,
-        max_tokens=4096,
-        temperature=0.0,
     )
 
-    pipeline = SOPPipeline(
-        llm=llm,
-        output_dir=Path(
+    pipeline = (
+        SOPPipeline(
+            configuration
+        )
+    )
+
+    result = pipeline.run(
+
+        source_path=Path(
+            args.source
+        ),
+
+        template_path=Path(
+            args.template
+        ),
+
+        knowledge_files=[
+            Path(file)
+            for file
+            in args.knowledge
+        ],
+
+        output_path=Path(
             args.output
         ),
     )
 
-    result = pipeline.run(
-        source_pdf=Path(
-            args.source
-        ),
-        template_docx=Path(
-            args.template
-        ),
+    print(
+        "\nSOP processing completed."
     )
 
     print(
-        "Generated:",
-        result["generated"],
+        "Generated document:",
+        result[
+            "generated_document"
+        ],
+    )
+
+    print(
+        "Validation passed:",
+        result[
+            "validation"
+        ][
+            "passed"
+        ],
     )
 
 
 if __name__ == "__main__":
-    main()
 
+    main()
 
 
 
