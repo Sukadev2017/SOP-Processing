@@ -1,17 +1,33 @@
 from __future__ import annotations
 
+import re
 import shutil
+
 from pathlib import Path
 
 from docx import Document
 
+from docx.oxml import (
+    OxmlElement,
+)
 
-class TemplateRenderer:
+from docx.text.paragraph import (
+    Paragraph,
+)
+
+from .models import (
+    Mapping,
+)
+
+
+class ControlledDOCXRenderer:
 
     def render(
         self,
         template_path: Path,
-        mapping: dict,
+        mappings: list[
+            Mapping
+        ],
         output_path: Path,
     ):
 
@@ -19,6 +35,8 @@ class TemplateRenderer:
             parents=True,
             exist_ok=True,
         )
+
+        # Never modify original template.
 
         shutil.copy2(
             template_path,
@@ -29,57 +47,86 @@ class TemplateRenderer:
             str(output_path)
         )
 
-        generated = {}
+        mapping_lookup = {
+            mapping.target_id:
+                mapping
+            for mapping
+            in mappings
+        }
 
-        for item in mapping.get(
-            "mappings",
-            []
+        for paragraph in list(
+            document.paragraphs
         ):
 
-            generated[
-                str(
-                    item.get(
-                        "target_section_id"
-                    )
-                )
-            ] = item.get(
-                "generated_content",
-                "",
-            )
-
-        for paragraph in document.paragraphs:
-
-            text = (
+            heading_text = (
                 paragraph.text
                 .strip()
-                .upper()
             )
 
-            for section_id, content in (
-                generated.items()
-            ):
+            match = re.match(
+                r"^(\d+)\s+(.+)$",
+                heading_text,
+            )
 
-                prefix = (
-                    section_id + " "
+            if not match:
+                continue
+
+            section_id = (
+                match.group(1)
+            )
+
+            if (
+                section_id
+                not in mapping_lookup
+            ):
+                continue
+
+            mapping = (
+                mapping_lookup[
+                    section_id
+                ]
+            )
+
+            content = (
+                mapping
+                .transformed_content
+                .strip()
+            )
+
+            if not content:
+                continue
+
+            new_xml_paragraph = (
+                OxmlElement(
+                    "w:p"
+                )
+            )
+
+            paragraph._p.addnext(
+                new_xml_paragraph
+            )
+
+            new_paragraph = (
+                Paragraph(
+                    new_xml_paragraph,
+                    paragraph._parent,
+                )
+            )
+
+            try:
+
+                new_paragraph.style = (
+                    document.styles[
+                        "Normal"
+                    ]
                 )
 
-                if text.startswith(
-                    prefix
-                ):
+            except KeyError:
+                pass
 
-                    if not content:
-                        continue
-
-                    new_para = (
-                        paragraph
-                        .insert_paragraph_before(
-                            ""
-                        )
-                    )
-
-                    new_para.add_run(
-                        content
-                    )
+            new_paragraph.add_run(
+                content
+            )
 
         document.save(
             str(output_path)
