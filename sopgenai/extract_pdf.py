@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import io
 import uuid
+
 from pathlib import Path
+from typing import List
 
 import fitz
 import pdfplumber
@@ -13,464 +15,540 @@ from PIL import Image
 from pypdf import PdfReader
 
 from .models import (
-    BoundingBox,
+    BBox,
     CanonicalDocument,
-    DocumentElement,
-    DocumentMetadata,
-    ImageElement,
-    TableCell,
-    TableElement,
-    TextSpan,
+    Element,
+    TextRun,
 )
 
 
-def file_hash(path: Path) -> str:
+def sha256(
+    path: Path,
+) -> str:
 
-    sha = hashlib.sha256()
+    digest = hashlib.sha256()
 
-    with path.open("rb") as f:
+    with path.open(
+        "rb"
+    ) as file:
 
         for chunk in iter(
-            lambda: f.read(1024 * 1024),
+            lambda: file.read(
+                1024 * 1024
+            ),
             b"",
         ):
-            sha.update(chunk)
+            digest.update(
+                chunk
+            )
 
-    return sha.hexdigest()
+    return digest.hexdigest()
 
 
-def color_to_hex(color: int) -> str:
+def color_to_hex(
+    value: int,
+) -> str:
 
-    return f"#{color:06X}"
+    return f"#{value:06X}"
 
 
 class PDFExtractor:
 
     def __init__(
         self,
-        ocr_enabled=True,
-        ocr_min_chars=50,
-        render_dpi=250,
+        extraction_config: dict,
     ):
 
-        self.ocr_enabled = ocr_enabled
+        pdf_config = (
+            extraction_config[
+                "pdf"
+            ]
+        )
 
-        self.ocr_min_chars = ocr_min_chars
+        ocr = pdf_config[
+            "ocr"
+        ]
 
-        self.render_dpi = render_dpi
+        self.ocr_enabled = (
+            ocr.get(
+                "enabled",
+                True,
+            )
+        )
+
+        self.ocr_dpi = ocr.get(
+            "dpi",
+            300,
+        )
+
+        self.min_native_chars = (
+            ocr.get(
+                "minimum_native_characters",
+                40,
+            )
+        )
+
+        self.min_ocr_confidence = (
+            ocr.get(
+                "minimum_confidence",
+                40,
+            )
+        )
 
     def extract(
         self,
-        pdf_path: Path,
-        document_type: str = "SOP",
+        path: Path,
+        document_type: str | None = None,
     ) -> CanonicalDocument:
 
-        document_id = (
-            f"DOC-{uuid.uuid4().hex[:12].upper()}"
+        pymupdf_document = (
+            fitz.open(
+                str(path)
+            )
         )
 
-        metadata = self._metadata(
-            pdf_path,
-            document_id,
-            document_type,
+        pypdf_reader = (
+            PdfReader(
+                str(path)
+            )
         )
 
-        elements = self._extract_pymupdf(
-            pdf_path
-        )
+        elements: List[
+            Element
+        ] = []
 
-        tables = self._extract_tables(
-            pdf_path
-        )
-
-        images = self._extract_images(
-            pdf_path
-        )
-
-        return CanonicalDocument(
-            metadata=metadata,
-            elements=elements,
-            tables=tables,
-            images=images,
-            extraction_metadata={
-                "primary_parser": "PyMuPDF",
-                "metadata_parser": "pypdf",
-                "table_parser": "pdfplumber",
-                "ocr": "Tesseract",
-            },
-        )
-
-    def _metadata(
-        self,
-        path,
-        document_id,
-        document_type,
-    ):
-
-        reader = PdfReader(str(path))
-
-        info = reader.metadata or {}
-
-        return DocumentMetadata(
-            document_id=document_id,
-            file_name=path.name,
-            file_type="pdf",
-            title=info.get("/Title"),
-            document_type=document_type,
-            file_hash=file_hash(path),
-        )
-
-    def _extract_pymupdf(
-        self,
-        path: Path,
-    ):
-
-        doc = fitz.open(str(path))
-
-        elements = []
+        assets = []
 
         order = 0
 
-        for page_index, page in enumerate(doc):
-
-            page_number = page_index + 1
-
-            page_dict = page.get_text(
-                "dict"
-            )
-
-            page_text = []
-
-            for block in page_dict["blocks"]:
-
-                if block.get("type") != 0:
-                    continue
-
-                for line in block.get(
-                    "lines", []
-                ):
-
-                    spans = []
-
-                    text_parts = []
-
-                    for span in line.get(
-                        "spans", []
-                    ):
-
-                        text = span.get(
-                            "text", ""
-                        )
-
-                        if not text.strip():
-                            continue
-
-                        text_parts.append(text)
-
-                        bbox = span.get(
-                            "bbox"
-                        )
-
-                        spans.append(
-                            TextSpan(
-                                text=text,
-                                bbox=BoundingBox(
-                                    x0=bbox[0],
-                                    y0=bbox[1],
-                                    x1=bbox[2],
-                                    y1=bbox[3],
-                                ),
-                                font=span.get(
-                                    "font"
-                                ),
-                                size=span.get(
-                                    "size"
-                                ),
-                                color=color_to_hex(
-                                    span.get(
-                                        "color",
-                                        0,
-                                    )
-                                ),
-                                bold=(
-                                    "bold"
-                                    in span.get(
-                                        "font",
-                                        "",
-                                    ).lower()
-                                ),
-                                italic=(
-                                    "italic"
-                                    in span.get(
-                                        "font",
-                                        "",
-                                    ).lower()
-                                ),
-                            )
-                        )
-
-                    line_text = "".join(
-                        text_parts
-                    ).strip()
-
-                    if not line_text:
-                        continue
-
-                    order += 1
-
-                    page_text.append(
-                        line_text
-                    )
-
-                    bbox = line.get(
-                        "bbox"
-                    )
-
-                    elements.append(
-                        DocumentElement(
-                            element_id=(
-                                f"EL-{order:07d}"
-                            ),
-                            type="text",
-                            page_number=page_number,
-                            order=order,
-                            text=line_text,
-                            bbox=BoundingBox(
-                                x0=bbox[0],
-                                y0=bbox[1],
-                                x1=bbox[2],
-                                y1=bbox[3],
-                            ),
-                            spans=spans,
-                            extraction_method=(
-                                "PyMuPDF"
-                            ),
-                        )
-                    )
-
-            combined = "\n".join(
-                page_text
-            )
-
-            if (
-                self.ocr_enabled
-                and len(combined.strip())
-                < self.ocr_min_chars
-            ):
-
-                ocr_text = self._ocr_page(
-                    page
-                )
-
-                if ocr_text.strip():
-
-                    order += 1
-
-                    elements.append(
-                        DocumentElement(
-                            element_id=(
-                                f"EL-{order:07d}"
-                            ),
-                            type="ocr_text",
-                            page_number=page_number,
-                            order=order,
-                            text=ocr_text,
-                            extraction_method=(
-                                "Tesseract"
-                            ),
-                            confidence=None,
-                        )
-                    )
-
-        doc.close()
-
-        return elements
-
-    def _ocr_page(
-        self,
-        page,
-    ):
-
-        zoom = self.render_dpi / 72
-
-        matrix = fitz.Matrix(
-            zoom,
-            zoom,
-        )
-
-        pix = page.get_pixmap(
-            matrix=matrix,
-            alpha=False,
-        )
-
-        image = Image.open(
-            io.BytesIO(
-                pix.tobytes("png")
-            )
-        )
-
-        return pytesseract.image_to_string(
-            image
-        )
-
-    def _extract_tables(
-        self,
-        path: Path,
-    ):
-
-        tables = []
-
-        table_counter = 0
-
         with pdfplumber.open(
             str(path)
-        ) as pdf:
+        ) as plumber:
 
             for page_number, page in enumerate(
-                pdf.pages,
+                pymupdf_document,
                 start=1,
             ):
 
-                extracted = (
-                    page.extract_tables()
-                    or []
+                native_text = []
+
+                raw = page.get_text(
+                    "dict"
                 )
 
-                for table in extracted:
+                for block in raw.get(
+                    "blocks",
+                    [],
+                ):
 
-                    table_counter += 1
+                    if (
+                        block.get(
+                            "type"
+                        )
+                        != 0
+                    ):
+                        continue
 
-                    cells = []
-
-                    row_count = len(table)
-
-                    col_count = max(
-                        (
-                            len(row)
-                            for row in table
-                            if row
-                        ),
-                        default=0,
-                    )
-
-                    for row_index, row in enumerate(
-                        table
+                    for line in block.get(
+                        "lines",
+                        [],
                     ):
 
-                        if not row:
-                            continue
+                        line_runs = []
 
-                        for col_index, value in enumerate(
-                            row
+                        line_text = []
+
+                        for span in line.get(
+                            "spans",
+                            [],
                         ):
 
-                            cells.append(
-                                TableCell(
-                                    row=row_index,
-                                    column=col_index,
-                                    text=(
-                                        value or ""
-                                    ).strip(),
+                            text = span.get(
+                                "text",
+                                "",
+                            )
+
+                            if not text:
+                                continue
+
+                            line_text.append(
+                                text
+                            )
+
+                            bbox = span.get(
+                                "bbox"
+                            )
+
+                            font = span.get(
+                                "font",
+                                "",
+                            )
+
+                            line_runs.append(
+                                TextRun(
+                                    text=text,
+
+                                    font=font,
+
+                                    size=span.get(
+                                        "size"
+                                    ),
+
+                                    color=(
+                                        color_to_hex(
+                                            span.get(
+                                                "color",
+                                                0,
+                                            )
+                                        )
+                                    ),
+
+                                    bold=(
+                                        "bold"
+                                        in font.lower()
+                                    ),
+
+                                    italic=(
+                                        "italic"
+                                        in font.lower()
+                                    ),
+
+                                    bbox=(
+                                        BBox(
+                                            x0=bbox[0],
+                                            y0=bbox[1],
+                                            x1=bbox[2],
+                                            y1=bbox[3],
+                                        )
+                                        if bbox
+                                        else None
+                                    ),
                                 )
                             )
 
-                    tables.append(
-                        TableElement(
-                            table_id=(
-                                f"TABLE-"
-                                f"{table_counter:05d}"
+                        combined = (
+                            "".join(
+                                line_text
+                            ).strip()
+                        )
+
+                        if not combined:
+                            continue
+
+                        native_text.append(
+                            combined
+                        )
+
+                        order += 1
+
+                        bbox = line.get(
+                            "bbox"
+                        )
+
+                        elements.append(
+                            Element(
+                                element_id=(
+                                    f"P{page_number}"
+                                    f"-TXT-"
+                                    f"{order:06d}"
+                                ),
+
+                                type="text",
+
+                                page=(
+                                    page_number
+                                ),
+
+                                order=order,
+
+                                text=combined,
+
+                                bbox=(
+                                    BBox(
+                                        x0=bbox[0],
+                                        y0=bbox[1],
+                                        x1=bbox[2],
+                                        y1=bbox[3],
+                                    )
+                                    if bbox
+                                    else None
+                                ),
+
+                                runs=(
+                                    line_runs
+                                ),
+
+                                provenance={
+                                    "extractor":
+                                        "pymupdf"
+                                },
+                            )
+                        )
+
+                # ------------------------
+                # TABLE EXTRACTION
+                # ------------------------
+
+                tables = (
+                    plumber
+                    .pages[
+                        page_number - 1
+                    ]
+                    .extract_tables()
+                    or []
+                )
+
+                for table_index, table in enumerate(
+                    tables,
+                    start=1,
+                ):
+
+                    rows = [
+                        [
+                            ""
+                            if cell is None
+                            else str(cell)
+                            for cell
+                            in row
+                        ]
+                        for row
+                        in table
+                    ]
+
+                    order += 1
+
+                    elements.append(
+                        Element(
+                            element_id=(
+                                f"P{page_number}"
+                                f"-TABLE-"
+                                f"{table_index:03d}"
                             ),
-                            page_number=(
+
+                            type="table",
+
+                            page=(
                                 page_number
                             ),
-                            order=(
-                                table_counter
+
+                            order=order,
+
+                            text="\n".join(
+                                " | ".join(
+                                    row
+                                )
+                                for row
+                                in rows
                             ),
-                            rows=row_count,
-                            columns=col_count,
-                            cells=cells,
-                            extraction_method=(
-                                "pdfplumber"
-                            ),
+
+                            metadata={
+                                "rows":
+                                    rows
+                            },
+
+                            provenance={
+                                "extractor":
+                                    "pdfplumber"
+                            },
                         )
                     )
 
-        return tables
+                # ------------------------
+                # OCR FALLBACK
+                # ------------------------
 
-    def _extract_images(
-        self,
-        path: Path,
-    ):
-
-        doc = fitz.open(str(path))
-
-        images = []
-
-        counter = 0
-
-        for page_index, page in enumerate(doc):
-
-            for image_info in (
-                page.get_images(
-                    full=True
+                page_native_text = (
+                    " ".join(
+                        native_text
+                    ).strip()
                 )
-            ):
 
-                counter += 1
-
-                xref = image_info[0]
-
-                image_data = (
-                    doc.extract_image(
-                        xref
+                if (
+                    self.ocr_enabled
+                    and len(
+                        page_native_text
                     )
-                )
+                    < self.min_native_chars
+                ):
 
-                image_bytes = (
-                    image_data["image"]
-                )
-
-                try:
+                    pixmap = (
+                        page.get_pixmap(
+                            dpi=(
+                                self.ocr_dpi
+                            ),
+                            alpha=False,
+                        )
+                    )
 
                     image = Image.open(
                         io.BytesIO(
-                            image_bytes
+                            pixmap.tobytes(
+                                "png"
+                            )
                         )
                     )
 
-                    ocr_text = (
+                    ocr_result = (
                         pytesseract
-                        .image_to_string(
-                            image
+                        .image_to_data(
+                            image,
+                            output_type=(
+                                pytesseract
+                                .Output
+                                .DICT
+                            ),
                         )
                     )
 
-                    width, height = (
-                        image.size
+                    words = []
+
+                    for index, text in enumerate(
+                        ocr_result[
+                            "text"
+                        ]
+                    ):
+
+                        text = (
+                            text.strip()
+                        )
+
+                        if not text:
+                            continue
+
+                        try:
+                            confidence = float(
+                                ocr_result[
+                                    "conf"
+                                ][index]
+                            )
+                        except (
+                            TypeError,
+                            ValueError,
+                        ):
+                            confidence = -1
+
+                        if (
+                            confidence
+                            >= self.min_ocr_confidence
+                        ):
+                            words.append(
+                                text
+                            )
+
+                    if words:
+
+                        order += 1
+
+                        elements.append(
+                            Element(
+                                element_id=(
+                                    f"P{page_number}"
+                                    "-OCR"
+                                ),
+
+                                type=(
+                                    "ocr_text"
+                                ),
+
+                                page=(
+                                    page_number
+                                ),
+
+                                order=order,
+
+                                text=" ".join(
+                                    words
+                                ),
+
+                                provenance={
+                                    "extractor":
+                                        "tesseract",
+
+                                    "dpi":
+                                        self.ocr_dpi,
+                                },
+                            )
+                        )
+
+                # ------------------------
+                # IMAGE REFERENCES
+                # ------------------------
+
+                for image_index, image in enumerate(
+                    page.get_images(
+                        full=True
+                    ),
+                    start=1,
+                ):
+
+                    assets.append(
+                        {
+                            "asset_id": (
+                                f"P{page_number}"
+                                f"-IMG-"
+                                f"{image_index}"
+                            ),
+
+                            "page":
+                                page_number,
+
+                            "xref":
+                                image[0],
+
+                            "type":
+                                "embedded_image",
+                        }
                     )
 
-                except Exception:
+        metadata = {
+            str(key).strip("/"):
+                value
+            for key, value
+            in (
+                pypdf_reader.metadata
+                or {}
+            ).items()
+        }
 
-                    ocr_text = ""
+        # pypdf independent extraction
+        # is retained as fallback/audit information.
 
-                    width = None
-                    height = None
+        metadata[
+            "pypdf_text_pages"
+        ] = [
+            (
+                page.extract_text()
+                or ""
+            )[:1000]
+            for page
+            in pypdf_reader.pages
+        ]
 
-                images.append(
-                    ImageElement(
-                        image_id=(
-                            f"IMG-{counter:05d}"
-                        ),
-                        page_number=(
-                            page_index + 1
-                        ),
-                        order=counter,
-                        width=width,
-                        height=height,
-                        ocr_text=ocr_text,
-                    )
-                )
+        pymupdf_document.close()
 
-        doc.close()
+        return CanonicalDocument(
+            document_id=(
+                "DOC-"
+                + uuid.uuid4()
+                .hex[:12]
+                .upper()
+            ),
 
-        return images
+            source_file=(
+                path.name
+            ),
+
+            source_sha256=(
+                sha256(path)
+            ),
+
+            document_type=(
+                document_type
+            ),
+
+            metadata=metadata,
+
+            elements=elements,
+
+            assets=assets,
+        )
