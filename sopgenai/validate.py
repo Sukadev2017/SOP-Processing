@@ -1,27 +1,14 @@
 from __future__ import annotations
 
-from .models import (
-    Mapping,
-)
-
-
-REQUIRED_SECTIONS = {
-    "1",
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "7",
-    "8",
-    "10",
-}
-
 
 ALLOWED_STATES = {
+
     "SOURCE_SUPPORTED",
+
     "REFERENCE_DERIVED",
+
     "CONFLICT",
+
     "SME_REQUIRED",
 }
 
@@ -30,57 +17,55 @@ class Validator:
 
     def validate(
         self,
-        mappings: list[
-            Mapping
-        ],
+        mappings,
+        target_sections,
     ):
 
         issues = []
 
-        populated = {
-            mapping.target_id
-            for mapping
-            in mappings
-            if (
-                mapping
-                .transformed_content
-                .strip()
+        expected = {
+
+            (
+                section.number
+                or section.section_id
             )
+
+            for section
+            in target_sections
         }
 
-        # --------------------------------
-        # Required sections
-        # --------------------------------
+        mapped = {
 
-        for section_id in sorted(
-            REQUIRED_SECTIONS
-            - populated
+            mapping.target_id
+
+            for mapping
+            in mappings
+        }
+
+        # ---------------------------------------------
+        # Every dynamically detected target section
+        # must have been processed.
+        # ---------------------------------------------
+
+        for target_id in sorted(
+            expected - mapped
         ):
 
             issues.append(
                 {
                     "severity":
-                        "WARNING",
+                        "ERROR",
 
                     "rule":
-                        "MISSING_SECTION",
+                        "TARGET_NOT_PROCESSED",
 
                     "section":
-                        section_id,
-
-                    "message":
-                        "Required template "
-                        "section has no "
-                        "generated content.",
+                        target_id,
 
                     "requires_review":
                         True,
                 }
             )
-
-        # --------------------------------
-        # Mapping validation
-        # --------------------------------
 
         for mapping in mappings:
 
@@ -100,17 +85,15 @@ class Validator:
                         "section":
                             mapping.target_id,
 
-                        "message":
-                            "Invalid generation "
-                            "state.",
-
                         "requires_review":
                             True,
                     }
                 )
 
             if mapping.state in {
+
                 "CONFLICT",
+
                 "SME_REQUIRED",
             }:
 
@@ -125,10 +108,6 @@ class Validator:
                         "section":
                             mapping.target_id,
 
-                        "message":
-                            "Human review "
-                            "is required.",
-
                         "requires_review":
                             True,
                     }
@@ -140,10 +119,14 @@ class Validator:
                     "SOURCE_SUPPORTED",
                     "REFERENCE_DERIVED",
                 }
+
                 and not (
                     mapping
                     .source_element_ids
-                    or mapping.evidence
+
+                    or
+
+                    mapping.evidence
                 )
             ):
 
@@ -158,28 +141,33 @@ class Validator:
                         "section":
                             mapping.target_id,
 
-                        "message":
-                            "Generated content "
-                            "does not contain "
-                            "source provenance.",
-
                         "requires_review":
                             True,
                     }
                 )
 
-        passed = not any(
-            issue[
-                "severity"
-            ]
-            == "ERROR"
-            for issue
-            in issues
-        )
-
         return {
+
             "passed":
-                passed,
+                not any(
+                    issue[
+                        "severity"
+                    ]
+                    == "ERROR"
+
+                    for issue
+                    in issues
+                ),
+
+            "target_sections_detected":
+                len(
+                    target_sections
+                ),
+
+            "target_sections_processed":
+                len(
+                    mappings
+                ),
 
             "human_review_required":
                 True,
