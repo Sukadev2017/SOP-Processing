@@ -11,17 +11,13 @@ from sentence_transformers import (
     SentenceTransformer,
 )
 
-from .models import (
-    KnowledgeUnit,
-)
-
 
 class HybridRetriever:
 
     def __init__(
         self,
-        embedding_config: dict,
-        retrieval_config: dict,
+        embedding_config,
+        retrieval_config,
     ):
 
         self.embedding_config = (
@@ -32,15 +28,11 @@ class HybridRetriever:
             retrieval_config
         )
 
-        model_name = (
-            embedding_config[
-                "model"
-            ]
-        )
-
         self.encoder = (
             SentenceTransformer(
-                model_name
+                embedding_config[
+                    "model"
+                ]
             )
         )
 
@@ -52,30 +44,44 @@ class HybridRetriever:
 
     def index(
         self,
-        units: list[
-            KnowledgeUnit
-        ],
+        units,
     ):
 
-        self.units = (
-            units
-        )
+        self.units = units
 
         if not units:
+
+            print(
+                "[Retrieval] "
+                "No knowledge units to index."
+            )
+
             return
 
+        print(
+            "[Retrieval] "
+            f"Indexing {len(units)} "
+            "knowledge units..."
+        )
+
         texts = [
+
             (
                 unit.title
                 + "\n"
                 + unit.text
             )
+
             for unit
             in units
         ]
 
         tokenized = [
-            text.lower().split()
+
+            text
+            .lower()
+            .split()
+
             for text
             in texts
         ]
@@ -88,16 +94,18 @@ class HybridRetriever:
 
         embeddings = (
             self.encoder.encode(
+
                 texts,
 
                 normalize_embeddings=(
-                    self
-                    .embedding_config
+                    self.embedding_config
                     .get(
                         "normalize_embeddings",
                         True,
                     )
                 ),
+
+                show_progress_bar=True,
             )
         )
 
@@ -108,13 +116,9 @@ class HybridRetriever:
             )
         )
 
-        dimension = (
-            embeddings.shape[1]
-        )
-
         self.faiss_index = (
             faiss.IndexFlatIP(
-                dimension
+                embeddings.shape[1]
             )
         )
 
@@ -122,36 +126,43 @@ class HybridRetriever:
             embeddings
         )
 
+        print(
+            "[Retrieval] "
+            "Index ready."
+        )
+
     def search(
         self,
-        query: str,
-        top_k: int | None = None,
+        query,
+        top_k=None,
     ):
 
         if not self.units:
+
             return []
 
         top_k = (
             top_k
             or self.config.get(
                 "top_k",
-                8,
+                6,
             )
         )
 
         multiplier = (
             self.config.get(
                 "candidate_multiplier",
-                4,
+                3,
             )
         )
 
         query_embedding = (
             self.encoder.encode(
+
                 [query],
+
                 normalize_embeddings=(
-                    self
-                    .embedding_config
+                    self.embedding_config
                     .get(
                         "normalize_embeddings",
                         True,
@@ -173,21 +184,28 @@ class HybridRetriever:
         )
 
         candidate_count = min(
+
             len(self.units),
+
             max(
-                top_k * multiplier,
+                top_k
+                * multiplier,
                 top_k,
             ),
         )
 
         scores, indexes = (
-            self.faiss_index.search(
+            self.faiss_index
+            .search(
                 query_embedding,
                 candidate_count,
             )
         )
 
-        for score, index in zip(
+        for (
+            score,
+            index,
+        ) in zip(
             scores[0],
             indexes[0],
         ):
@@ -223,66 +241,64 @@ class HybridRetriever:
                 )
             )
 
-        vector_weight = (
-            self.config.get(
-                "vector_weight",
-                0.45,
-            )
-        )
-
-        keyword_weight = (
-            self.config.get(
-                "keyword_weight",
-                0.35,
-            )
-        )
-
-        authority_weight = (
-            self.config.get(
-                "authority_weight",
-                0.20,
-            )
-        )
-
         results = []
 
-        for index, unit in enumerate(
+        for (
+            index,
+            unit,
+        ) in enumerate(
             self.units
         ):
 
-            authority_score = (
+            authority = (
                 unit.authority
                 / 100.0
             )
 
-            final_score = (
-                vector_weight
-                * dense_scores[index]
+            score = (
 
-                + keyword_weight
+                self.config.get(
+                    "vector_weight",
+                    0.45,
+                )
+                * dense_scores[
+                    index
+                ]
+
+                +
+
+                self.config.get(
+                    "keyword_weight",
+                    0.35,
+                )
                 * float(
                     sparse_scores[
                         index
                     ]
                 )
 
-                + authority_weight
-                * authority_score
+                +
+
+                self.config.get(
+                    "authority_weight",
+                    0.20,
+                )
+                * authority
             )
 
             results.append(
                 (
-                    final_score,
+                    score,
                     unit,
                 )
             )
 
-        results.sort(
+        return sorted(
+            results,
+
             key=lambda item:
                 item[0],
-            reverse=True,
-        )
 
-        return (
-            results[:top_k]
-        )
+            reverse=True,
+
+        )[:top_k]
