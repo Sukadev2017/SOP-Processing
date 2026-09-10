@@ -4,46 +4,33 @@ import json
 
 from pathlib import Path
 
-from .config import (
-    Configuration,
-)
+from .config import Configuration
 
-from .extract_pdf import (
-    PDFExtractor,
-)
+from .extract_pdf import PDFExtractor
 
-from .extract_docx import (
-    DOCXExtractor,
-)
+from .extract_docx import DOCXExtractor
 
-from .llm import (
-    LLMFactory,
-)
+from .llm import LLMFactory
 
-from .enrich import (
-    SemanticEnricher,
-)
+from .enrich import SemanticEnricher
 
-from .knowledge import (
-    KnowledgeBuilder,
-)
+from .knowledge import KnowledgeBuilder
 
-from .retrieval import (
-    HybridRetriever,
-)
+from .retrieval import HybridRetriever
 
 from .map_transform import (
     TARGET_SECTIONS,
     TemplateMapper,
 )
 
-from .validate import (
-    Validator,
-)
+from .validate import Validator
 
-from .render import (
-    ControlledDOCXRenderer,
-)
+from .render import ControlledDOCXRenderer
+
+
+# ==========================================================
+# JSON UTILITY
+# ==========================================================
 
 
 def save_json(
@@ -76,6 +63,11 @@ def save_json(
     )
 
 
+# ==========================================================
+# SOP PIPELINE
+# ==========================================================
+
+
 class SOPPipeline:
 
     def __init__(
@@ -85,29 +77,26 @@ class SOPPipeline:
 
         self.config = config
 
-        # ----------------------------
-        # LLM
-        # ----------------------------
+        # --------------------------------------------------
+        # IMPORTANT
+        #
+        # Do not initialize an LLM here.
+        #
+        # This allows extraction-only mode to work without:
+        #
+        # Ollama
+        # Hugging Face
+        # OpenAI
+        # Anthropic
+        # API keys
+        #
+        # --------------------------------------------------
 
-        self.llm = (
-            LLMFactory.create(
-                config.llm
-            )
-        )
+        self.llm = None
 
-        # ----------------------------
-        # Semantic enrichment
-        # ----------------------------
+        self.enricher = None
 
-        self.enricher = (
-            SemanticEnricher(
-                self.llm
-            )
-        )
-
-        # ----------------------------
-        # Knowledge builder
-        # ----------------------------
+        # Knowledge builder does not require LLM.
 
         self.knowledge_builder = (
             KnowledgeBuilder(
@@ -115,44 +104,214 @@ class SOPPipeline:
             )
         )
 
+    # ======================================================
+    # LLM INITIALIZATION
+    # ======================================================
+
+    def initialize_llm(
+        self,
+    ):
+
+        if self.llm is not None:
+            return
+
+        print(
+            "Initializing LLM provider..."
+        )
+
+        self.llm = (
+            LLMFactory.create(
+                self.config.llm
+            )
+        )
+
+        self.enricher = (
+            SemanticEnricher(
+                self.llm
+            )
+        )
+
+    # ======================================================
+    # DOCUMENT EXTRACTION
+    # ======================================================
+
     def extract(
         self,
         path: Path,
-        document_type: str | None = None,
+        document_type=None,
     ):
+
+        if not path.exists():
+
+            raise FileNotFoundError(
+                f"Document not found: {path}"
+            )
 
         suffix = (
             path.suffix
             .lower()
         )
 
+        # --------------------------------------------------
+        # PDF
+        # --------------------------------------------------
+
         if suffix == ".pdf":
 
-            return (
+            extractor = (
                 PDFExtractor(
                     self.config
                     .extraction
                 )
-                .extract(
-                    path,
-                    document_type,
-                )
             )
+
+            return extractor.extract(
+                path,
+                document_type,
+            )
+
+        # --------------------------------------------------
+        # DOCX
+        # --------------------------------------------------
 
         if suffix == ".docx":
 
-            return (
+            extractor = (
                 DOCXExtractor()
-                .extract(
-                    path,
-                    document_type,
-                )
+            )
+
+            return extractor.extract(
+                path,
+                document_type,
             )
 
         raise ValueError(
-            "Unsupported document "
-            f"type: {suffix}"
+            "Unsupported document type: "
+            f"{suffix}. "
+            "Supported types are PDF and DOCX."
         )
+
+    # ======================================================
+    # EXTRACTION-ONLY PIPELINE
+    # ======================================================
+
+    def run_extraction_only(
+        self,
+        source_path: Path,
+        template_path: Path,
+        output_path: Path,
+    ):
+
+        """
+        Extract only the source SOP and target template.
+
+        Generated files:
+
+            source_structure.json
+            template_structure.json
+
+        This method DOES NOT initialize or call:
+
+            Ollama
+            Hugging Face
+            OpenAI
+            Anthropic
+            Sentence Transformers
+            FAISS
+            BM25
+            Template Mapping
+            GenAI Generation
+            Validation
+            DOCX Renderer
+        """
+
+        output_path.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        # --------------------------------------------------
+        # SOURCE
+        # --------------------------------------------------
+
+        print(
+            "Extracting source document:"
+        )
+
+        print(
+            source_path
+        )
+
+        source_document = (
+            self.extract(
+                source_path,
+                "SOP",
+            )
+        )
+
+        # --------------------------------------------------
+        # TEMPLATE
+        # --------------------------------------------------
+
+        print(
+            "Extracting template document:"
+        )
+
+        print(
+            template_path
+        )
+
+        template_document = (
+            self.extract(
+                template_path,
+                "TEMPLATE",
+            )
+        )
+
+        # --------------------------------------------------
+        # OUTPUT PATHS
+        # --------------------------------------------------
+
+        source_output = (
+            output_path
+            / "source_structure.json"
+        )
+
+        template_output = (
+            output_path
+            / "template_structure.json"
+        )
+
+        # --------------------------------------------------
+        # SAVE SOURCE
+        # --------------------------------------------------
+
+        save_json(
+            source_output,
+            source_document,
+        )
+
+        # --------------------------------------------------
+        # SAVE TEMPLATE
+        # --------------------------------------------------
+
+        save_json(
+            template_output,
+            template_document,
+        )
+
+        return {
+
+            "source_structure":
+                source_output,
+
+            "template_structure":
+                template_output,
+        }
+
+    # ======================================================
+    # FULL GENAI PIPELINE
+    # ======================================================
 
     def run(
         self,
@@ -169,84 +328,106 @@ class SOPPipeline:
             exist_ok=True,
         )
 
+        # --------------------------------------------------
+        # Initialize LLM only for full pipeline
+        # --------------------------------------------------
+
+        self.initialize_llm()
+
         # ==================================================
         # 1. SOURCE SOP
         # ==================================================
 
-        source_document = (
-            self.extract(
-                source_path,
-                "SOP",
-            )
+        print(
+            "Processing source SOP..."
+        )
+
+        source = self.extract(
+            source_path,
+            "SOP",
         )
 
         self.enricher.enrich(
-            source_document
+            source
         )
 
         # ==================================================
         # 2. TEMPLATE
         # ==================================================
 
-        template_document = (
-            self.extract(
-                template_path,
-                "TEMPLATE",
-            )
+        print(
+            "Processing template..."
+        )
+
+        template = self.extract(
+            template_path,
+            "TEMPLATE",
         )
 
         # ==================================================
         # 3. ENTERPRISE KNOWLEDGE
         # ==================================================
 
-        knowledge_units = []
+        units = []
 
-        for knowledge_file in (
+        for file in (
             knowledge_files
         ):
 
-            knowledge_document = (
+            print(
+                "Processing knowledge document:",
+                file,
+            )
+
+            document = (
                 self.extract(
-                    knowledge_file
+                    file
                 )
             )
 
             self.enricher.enrich(
-                knowledge_document
+                document
             )
 
-            units = (
+            document_units = (
                 self
                 .knowledge_builder
                 .build(
-                    knowledge_document
+                    document
                 )
             )
 
-            knowledge_units.extend(
-                units
+            units.extend(
+                document_units
             )
 
-        # Source SOP also becomes searchable evidence.
+        # ==================================================
+        # 4. SOURCE SOP KNOWLEDGE
+        # ==================================================
 
         source_units = (
             self
             .knowledge_builder
             .build(
-                source_document
+                source
             )
         )
 
-        knowledge_units.extend(
+        units.extend(
             source_units
         )
 
         # ==================================================
-        # 4. HYBRID RETRIEVAL
+        # 5. HYBRID RETRIEVAL
         # ==================================================
+
+        print(
+            "Building hybrid retrieval index..."
+        )
 
         retriever = (
             HybridRetriever(
+
                 embedding_config=(
                     self.config
                     .embedding
@@ -260,7 +441,7 @@ class SOPPipeline:
         )
 
         retriever.index(
-            knowledge_units
+            units
         )
 
         retrieved = {}
@@ -288,8 +469,13 @@ class SOPPipeline:
             )
 
         # ==================================================
-        # 5. TEMPLATE MAPPING / GENERATION
+        # 6. TEMPLATE MAPPING / GENERATION
         # ==================================================
+
+        print(
+            "Mapping source content "
+            "to target template..."
+        )
 
         mapper = (
             TemplateMapper(
@@ -299,16 +485,20 @@ class SOPPipeline:
 
         mappings = (
             mapper.map(
-                source_document,
+                source,
                 retrieved,
             )
         )
 
         # ==================================================
-        # 6. VALIDATION
+        # 7. VALIDATION
         # ==================================================
 
-        validation_report = (
+        print(
+            "Validating generated content..."
+        )
+
+        report = (
             Validator()
             .validate(
                 mappings
@@ -316,28 +506,25 @@ class SOPPipeline:
         )
 
         # ==================================================
-        # 7. PERSIST ARTIFACTS
+        # 8. JSON OUTPUTS
         # ==================================================
 
         save_json(
             output_path
             / "source_structure.json",
-
-            source_document,
+            source,
         )
 
         save_json(
             output_path
             / "template_structure.json",
-
-            template_document,
+            template,
         )
 
         save_json(
             output_path
             / "semantic_content.json",
-
-            source_document.semantic,
+            source.semantic,
         )
 
         save_json(
@@ -346,37 +533,41 @@ class SOPPipeline:
 
             [
                 unit.model_dump()
+
                 for unit
-                in knowledge_units
+                in units
             ],
         )
-
-        retrieval_json = {}
-
-        for (
-            section_id,
-            results,
-        ) in retrieved.items():
-
-            retrieval_json[
-                section_id
-            ] = [
-                {
-                    "score":
-                        score,
-
-                    "knowledge_unit":
-                        unit.model_dump(),
-                }
-                for score, unit
-                in results
-            ]
 
         save_json(
             output_path
             / "retrieval_results.json",
 
-            retrieval_json,
+            {
+
+                section_id: [
+
+                    {
+                        "score":
+                            score,
+
+                        "knowledge_unit":
+                            unit.model_dump(),
+                    }
+
+                    for (
+                        score,
+                        unit,
+                    )
+                    in results
+                ]
+
+                for (
+                    section_id,
+                    results,
+                )
+                in retrieved.items()
+            },
         )
 
         save_json(
@@ -385,6 +576,7 @@ class SOPPipeline:
 
             [
                 mapping.model_dump()
+
                 for mapping
                 in mappings
             ],
@@ -393,17 +585,21 @@ class SOPPipeline:
         save_json(
             output_path
             / "validation_report.json",
-
-            validation_report,
+            report,
         )
 
         # ==================================================
-        # 8. DOCX
+        # 9. DOCX RENDERING
         # ==================================================
 
-        generated_document = (
+        print(
+            "Generating DOCX..."
+        )
+
+        generated = (
             ControlledDOCXRenderer()
             .render(
+
                 template_path=(
                     template_path
                 ),
@@ -420,11 +616,12 @@ class SOPPipeline:
         )
 
         return {
+
             "generated_document":
-                generated_document,
+                generated,
 
             "validation":
-                validation_report,
+                report,
 
             "mappings":
                 mappings,
