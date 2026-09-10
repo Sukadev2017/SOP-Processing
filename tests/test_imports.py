@@ -18,12 +18,18 @@ def test_llm_factory():
         HuggingFaceProvider,
         OpenAIProvider,
         AnthropicProvider,
+        OllamaProvider,
     )
 
     assert LLMFactory
+
     assert HuggingFaceProvider
+
     assert OpenAIProvider
+
     assert AnthropicProvider
+
+    assert OllamaProvider
 
 
 def test_pipeline():
