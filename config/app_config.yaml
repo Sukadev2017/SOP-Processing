@@ -1,133 +1,95 @@
 application:
   name: "SOP GenAI Migration Platform"
-  version: "3.0"
-
-
-# ==========================================================
-# LLM
-# ==========================================================
+  version: "6.0"
 
 llm:
-
-  # Available values:
-  #
-  # huggingface
-  # openai
-  # anthropic
-  # ollama
-
   provider: "ollama"
 
   temperature: 0.0
-  max_tokens: 8192
-  timeout: 180
 
+  # Keep responses relatively small.
+  max_tokens: 2048
 
-  # --------------------------------------------------------
-  # Hugging Face
-  # --------------------------------------------------------
+  # Local inference can be slower on CPU.
+  timeout: 600
 
-  huggingface:
-
-    model: "zai-org/GLM-5.2"
-
-    inference_provider: "zai-org"
-
-    api_key_env: "HF_TOKEN"
-
-
-  # --------------------------------------------------------
-  # OpenAI
-  # --------------------------------------------------------
-
-  openai:
-
-    model: "YOUR_OPENAI_MODEL"
-
-    api_key_env: "OPENAI_API_KEY"
-
-    base_url: null
-
-
-  # --------------------------------------------------------
-  # Anthropic
-  # --------------------------------------------------------
-
-  anthropic:
-
-    model: "YOUR_ANTHROPIC_MODEL"
-
-    api_key_env: "ANTHROPIC_API_KEY"
-
-
-  # --------------------------------------------------------
-  # Ollama
-  # --------------------------------------------------------
+  # Protect a small SLM from oversized prompts.
+  max_input_chars: 24000
 
   ollama:
-
-    # Example:
-    #
-    # qwen3:8b
-    # llama3.1:8b
-    # mistral
-    #
-    # Use a model installed in your Ollama instance.
-
-    model: "YOUR_OLLAMA_MODEL"
-
+    model: "qwen3:4b-instruct-2507-q4_K_M"
     base_url: "http://localhost:11434"
 
+    # Keep model resident between section calls.
+    keep_alive: "10m"
 
-# ==========================================================
-# EXTRACTION
-# ==========================================================
+    # Ollama context allocation.
+    num_ctx: 16384
+
+  huggingface:
+    model: "zai-org/GLM-5.2"
+    inference_provider: "zai-org"
+    api_key_env: "HF_TOKEN"
+
+  openai:
+    model: "YOUR_OPENAI_MODEL"
+    api_key_env: "OPENAI_API_KEY"
+    base_url: null
+
+  anthropic:
+    model: "YOUR_ANTHROPIC_MODEL"
+    api_key_env: "ANTHROPIC_API_KEY"
+
 
 extraction:
 
   pdf:
 
-    primary_parser: "pymupdf"
+    progress: true
 
-    table_parser: "pdfplumber"
-
-    metadata_parser: "pypdf"
-
-    ocr:
-
+    tables:
       enabled: true
 
-      engine: "tesseract"
-
-      dpi: 300
-
+    ocr:
+      enabled: true
+      dpi: 200
       minimum_native_characters: 40
-
       minimum_confidence: 40
 
 
-# ==========================================================
-# EMBEDDINGS
-# ==========================================================
+template:
+
+  heading:
+
+    max_level: 6
+
+    numbered_heading_regex: '^\\s*(\\d+(?:\\.\\d+)*)[\\s\\.\\-]+(.+)$'
+
+    uppercase_short_heading_max_chars: 120
+
+
+semantic_enrichment:
+
+  # Prevent sending the whole SOP to the SLM.
+  batch_size: 30
+
+  # Second protection against very large batches.
+  max_batch_chars: 18000
+
 
 embedding:
-
-  provider: "sentence_transformers"
 
   model: "sentence-transformers/all-MiniLM-L6-v2"
 
   normalize_embeddings: true
 
 
-# ==========================================================
-# RETRIEVAL
-# ==========================================================
-
 retrieval:
 
-  top_k: 8
+  # Only the best evidence reaches the SLM.
+  top_k: 6
 
-  candidate_multiplier: 4
+  candidate_multiplier: 3
 
   vector_weight: 0.45
 
@@ -136,64 +98,24 @@ retrieval:
   authority_weight: 0.20
 
 
-# ==========================================================
-# DOCUMENT AUTHORITY
-# ==========================================================
+generation:
+
+  # Additional guard on evidence sent to each section call.
+  evidence_per_section: 6
+
+  human_review_required: true
+
+  unsupported_state: "SME_REQUIRED"
+
 
 authority:
 
   POLICY: 100
-
   ORGANIZATIONAL_STANDARD: 90
-
   ARCHITECTURE_STANDARD: 80
-
   APPROVED_SOP: 70
-
   PROCESS_GUIDELINE: 60
-
   GUIDANCE: 60
-
   SOP: 50
-
   HISTORICAL_SOP: 30
-
   UNKNOWN: 0
-
-
-# ==========================================================
-# GENERATION
-# ==========================================================
-
-generation:
-
-  require_provenance: true
-
-  allow_unsupported_content: false
-
-  unsupported_state: "SME_REQUIRED"
-
-  human_review_required: true
-
-
-# ==========================================================
-# OUTPUT
-# ==========================================================
-
-output:
-
-  save_source_structure: true
-
-  save_template_structure: true
-
-  save_semantic_content: true
-
-  save_knowledge_units: true
-
-  save_retrieval_results: true
-
-  save_mapping: true
-
-  save_validation_report: true
-
-  generate_docx: true
