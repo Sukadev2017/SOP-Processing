@@ -2,23 +2,26 @@ application:
   name: "SOP GenAI Migration Platform"
   version: "3.0"
 
+
 # ==========================================================
-# LLM CONFIGURATION
+# LLM
 # ==========================================================
 
 llm:
 
-  # Change this value to:
+  # Available values:
   #
   # huggingface
   # openai
   # anthropic
+  # ollama
 
-  provider: "huggingface"
+  provider: "ollama"
 
   temperature: 0.0
   max_tokens: 8192
   timeout: 180
+
 
   # --------------------------------------------------------
   # Hugging Face
@@ -26,18 +29,12 @@ llm:
 
   huggingface:
 
-    # Example:
-    # zai-org/GLM-5.2
-
     model: "zai-org/GLM-5.2"
-
-    # Hugging Face inference provider.
-    #
-    # Can also be "auto" if appropriate for your environment.
 
     inference_provider: "zai-org"
 
     api_key_env: "HF_TOKEN"
+
 
   # --------------------------------------------------------
   # OpenAI
@@ -45,16 +42,12 @@ llm:
 
   openai:
 
-    # Put the approved model name here.
-
     model: "YOUR_OPENAI_MODEL"
 
     api_key_env: "OPENAI_API_KEY"
 
-    # Leave null for standard OpenAI endpoint.
-    # Can also point to an OpenAI-compatible endpoint.
-
     base_url: null
+
 
   # --------------------------------------------------------
   # Anthropic
@@ -62,15 +55,32 @@ llm:
 
   anthropic:
 
-    # Put the approved Claude model name here.
-
     model: "YOUR_ANTHROPIC_MODEL"
 
     api_key_env: "ANTHROPIC_API_KEY"
 
 
+  # --------------------------------------------------------
+  # Ollama
+  # --------------------------------------------------------
+
+  ollama:
+
+    # Example:
+    #
+    # qwen3:8b
+    # llama3.1:8b
+    # mistral
+    #
+    # Use a model installed in your Ollama instance.
+
+    model: "YOUR_OLLAMA_MODEL"
+
+    base_url: "http://localhost:11434"
+
+
 # ==========================================================
-# DOCUMENT EXTRACTION
+# EXTRACTION
 # ==========================================================
 
 extraction:
@@ -84,6 +94,7 @@ extraction:
     metadata_parser: "pypdf"
 
     ocr:
+
       enabled: true
 
       engine: "tesseract"
