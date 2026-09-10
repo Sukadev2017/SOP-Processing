@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import shutil
 
 from pathlib import Path
@@ -15,28 +14,21 @@ from docx.text.paragraph import (
     Paragraph,
 )
 
-from .models import (
-    Mapping,
-)
-
 
 class ControlledDOCXRenderer:
 
     def render(
         self,
-        template_path: Path,
-        mappings: list[
-            Mapping
-        ],
-        output_path: Path,
+        template_path,
+        template_document,
+        mappings,
+        output_path,
     ):
 
         output_path.parent.mkdir(
             parents=True,
             exist_ok=True,
         )
-
-        # Never modify original template.
 
         shutil.copy2(
             template_path,
@@ -48,44 +40,75 @@ class ControlledDOCXRenderer:
         )
 
         mapping_lookup = {
+
             mapping.target_id:
                 mapping
+
             for mapping
             in mappings
         }
 
-        for paragraph in list(
+        # ---------------------------------------------
+        # Match target sections using the actual
+        # extracted template headings.
+        # ---------------------------------------------
+
+        target_sections = {
+
+            section.heading_element_id:
+                section
+
+            for section
+            in template_document.sections
+
+            if (
+                section.heading_element_id
+            )
+        }
+
+        paragraph_number = 0
+
+        for paragraph in (
             document.paragraphs
         ):
 
-            heading_text = (
-                paragraph.text
-                .strip()
-            )
-
-            match = re.match(
-                r"^(\d+)\s+(.+)$",
-                heading_text,
-            )
-
-            if not match:
-                continue
-
-            section_id = (
-                match.group(1)
-            )
-
-            if (
-                section_id
-                not in mapping_lookup
+            if not (
+                paragraph.text.strip()
             ):
+
                 continue
+
+            paragraph_number += 1
+
+            element_id = (
+                f"DOCX-TXT-"
+                f"{paragraph_number:06d}"
+            )
+
+            section = (
+                target_sections.get(
+                    element_id
+                )
+            )
+
+            if not section:
+
+                continue
+
+            target_id = (
+                section.number
+                or section.section_id
+            )
 
             mapping = (
-                mapping_lookup[
-                    section_id
-                ]
+                mapping_lookup.get(
+                    target_id
+                )
             )
+
+            if not mapping:
+
+                continue
 
             content = (
                 mapping
@@ -94,21 +117,22 @@ class ControlledDOCXRenderer:
             )
 
             if not content:
+
                 continue
 
-            new_xml_paragraph = (
+            new_xml = (
                 OxmlElement(
                     "w:p"
                 )
             )
 
             paragraph._p.addnext(
-                new_xml_paragraph
+                new_xml
             )
 
             new_paragraph = (
                 Paragraph(
-                    new_xml_paragraph,
+                    new_xml,
                     paragraph._parent,
                 )
             )
@@ -122,6 +146,7 @@ class ControlledDOCXRenderer:
                 )
 
             except KeyError:
+
                 pass
 
             new_paragraph.add_run(
