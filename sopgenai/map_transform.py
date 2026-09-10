@@ -1,116 +1,67 @@
 from __future__ import annotations
 
-from .llm import (
-    LLMProvider,
-)
-
 from .models import (
     CanonicalDocument,
-    KnowledgeUnit,
     Mapping,
+    Section,
 )
-
-
-TARGET_SECTIONS = [
-
-    ("1", "PURPOSE"),
-
-    ("2", "APPLICABILITY"),
-
-    (
-        "3",
-        "DEFINITIONS & ABBREVIATIONS",
-    ),
-
-    (
-        "4",
-        "IMPLEMENTATION AND/OR PRE-REQUISITES",
-    ),
-
-    (
-        "5",
-        "ROLES & RESPONSIBILITIES",
-    ),
-
-    (
-        "6",
-        "PROCESS",
-    ),
-
-    (
-        "7",
-        "ASSOCIATED DOCUMENTS",
-    ),
-
-    (
-        "8",
-        "REFERENCES",
-    ),
-
-    (
-        "9",
-        "DISTRIBUTION OF CONTROLLED PRINTS/COPIES (OPTIONAL)",
-    ),
-
-    (
-        "10",
-        "DOCUMENT HISTORY",
-    ),
-]
 
 
 SYSTEM_PROMPT = """
-You are migrating an existing SOP into a controlled GP
-document template.
+You are constructing ONE section of a controlled SOP.
 
-SOURCE RULES
+You will receive:
 
-1. The source SOP is the primary source for existing
-   operational content.
+1. One target section extracted from the actual approved
+   Word template.
 
-2. Retrieved enterprise policies, standards, architecture
-   standards, guidelines, glossaries and approved SOPs may
-   provide additional evidence.
+2. The template's instructions/content associated with
+   that section.
 
-3. Do not silently overwrite source content when retrieved
-   evidence conflicts with it.
+3. A small set of evidence retrieved from the source SOP
+   and enterprise knowledge.
 
-4. Identify conflicts explicitly.
+Use ONLY supplied evidence.
 
-5. Do not invent missing operational information.
+Do not invent missing information.
 
-6. Every generated section must retain evidence.
+Determine whether the evidence supports content for this
+specific target section.
 
-7. Use one of these states:
+Preserve source_element_ids.
 
-   SOURCE_SUPPORTED
-   REFERENCE_DERIVED
-   CONFLICT
-   SME_REQUIRED
+If the evidence is insufficient:
+state = SME_REQUIRED.
 
-8. Use active, concise language.
+If evidence conflicts:
+state = CONFLICT.
 
-9. Use "must" for mandatory requirements.
+Allowed states:
 
-10. Use "should" for recommendations.
+SOURCE_SUPPORTED
+REFERENCE_DERIVED
+CONFLICT
+SME_REQUIRED
 
-11. Section 6 PROCESS should be how-style operational
-    content.
+Use active and concise language.
 
-Return JSON:
+Use "must" for mandatory requirements.
+
+Use "should" for recommendations.
+
+Return exactly:
 
 {
-  "mappings": [
-    {
-      "target_id": "...",
-      "target_heading": "...",
-      "source_element_ids": [],
-      "transformed_content": "...",
-      "confidence": 0.0,
-      "state": "...",
-      "evidence": []
-    }
-  ]
+  "mapping": {
+    "target_id": "...",
+    "target_heading": "...",
+    "target_level": 1,
+    "source_element_ids": [],
+    "transformed_content": "...",
+    "confidence": 0.0,
+    "state": "SOURCE_SUPPORTED",
+    "evidence": []
+  }
 }
 """
 
@@ -119,57 +70,69 @@ class TemplateMapper:
 
     def __init__(
         self,
-        llm: LLMProvider,
+        llm,
+        generation_config=None,
     ):
 
         self.llm = llm
 
-    def map(
-        self,
-        source: CanonicalDocument,
-        retrieved: dict[
-            str,
-            list[
-                tuple[
-                    float,
-                    KnowledgeUnit,
-                ]
-            ],
-        ],
+        self.config = (
+            generation_config
+            or {}
+        )
+
+        self.evidence_per_section = (
+            self.config.get(
+                "evidence_per_section",
+                6,
+            )
+        )
+
+    @staticmethod
+    def target_sections(
+        template_document:
+            CanonicalDocument,
     ):
 
-        source_elements = [
-            {
-                "element_id":
-                    element.element_id,
+        sections = sorted(
 
-                "page":
-                    element.page,
+            template_document.sections,
 
-                "type":
-                    element.type,
+            key=lambda section:
+                section.order,
+        )
 
-                "text":
-                    element.text,
-            }
-            for element
-            in source.elements
-            if element.text.strip()
-        ]
+        if not sections:
 
-        retrieval_context = {}
+            raise ValueError(
+                "No sections were detected "
+                "in the target template. "
+                "Check Word heading styles "
+                "or heading detection configuration."
+            )
+
+        return sections
+
+    def map_section(
+        self,
+        target_section:
+            Section,
+        retrieval_results,
+    ):
+
+        evidence = []
 
         for (
-            section_id,
-            results,
-        ) in retrieved.items():
+            score,
+            unit,
+        ) in retrieval_results[
+            :self.evidence_per_section
+        ]:
 
-            retrieval_context[
-                section_id
-            ] = [
+            evidence.append(
                 {
-                    "score":
-                        score,
+                    "retrieval_score":
+                        float(score),
 
                     "knowledge_unit_id":
                         unit.id,
@@ -190,30 +153,43 @@ class TemplateMapper:
                         unit
                         .source_element_ids,
                 }
-                for score, unit
-                in results
-            ]
+            )
+
+        target_id = (
+            target_section.number
+            or target_section.section_id
+        )
 
         payload = {
 
-            "target_sections": [
-                {
-                    "target_id":
-                        section_id,
+            "target_section": {
 
-                    "target_heading":
-                        heading,
-                }
-                for section_id, heading
-                in TARGET_SECTIONS
-            ],
+                "target_id":
+                    target_id,
 
-            "source_elements":
-                source_elements,
+                "target_heading":
+                    target_section.heading,
 
-            "retrieved_enterprise_evidence":
-                retrieval_context,
+                "target_level":
+                    target_section.level,
+
+                "template_instructions":
+                    target_section.text[
+                        :3000
+                    ],
+            },
+
+            "evidence":
+                evidence,
         }
+
+        print(
+            "[Mapping] "
+            f"{target_id} "
+            f"{target_section.heading} "
+            f"with {len(evidence)} "
+            "evidence units"
+        )
 
         response = (
             self.llm
@@ -223,19 +199,117 @@ class TemplateMapper:
             )
         )
 
+        item = (
+            response.get(
+                "mapping",
+                {},
+            )
+        )
+
+        # -------------------------------------------------
+        # Target identity comes from the actual template,
+        # not from the LLM.
+        # -------------------------------------------------
+
+        item[
+            "target_id"
+        ] = target_id
+
+        item[
+            "target_heading"
+        ] = (
+            target_section.heading
+        )
+
+        item[
+            "target_level"
+        ] = (
+            target_section.level
+        )
+
+        item.setdefault(
+            "source_element_ids",
+            [],
+        )
+
+        item.setdefault(
+            "transformed_content",
+            "",
+        )
+
+        item.setdefault(
+            "confidence",
+            0.0,
+        )
+
+        item.setdefault(
+            "state",
+            "SME_REQUIRED",
+        )
+
+        item.setdefault(
+            "evidence",
+            evidence,
+        )
+
+        return Mapping(
+            **item
+        )
+
+    def map(
+        self,
+        template_document,
+        retrieved,
+    ):
+
         mappings = []
 
-        for item in (
-            response.get(
-                "mappings",
-                []
+        target_sections = (
+            self.target_sections(
+                template_document
             )
+        )
+
+        total = len(
+            target_sections
+        )
+
+        for (
+            index,
+            section,
+        ) in enumerate(
+            target_sections,
+            1,
         ):
 
-            mappings.append(
-                Mapping(
-                    **item
+            target_id = (
+                section.number
+                or section.section_id
+            )
+
+            print(
+                f"[Mapping] "
+                f"Section {index}/{total}: "
+                f"{target_id} "
+                f"{section.heading}"
+            )
+
+            results = (
+                retrieved.get(
+                    target_id,
+                    [],
                 )
+            )
+
+            mapping = (
+                self.map_section(
+                    section,
+                    results,
+                )
+            )
+
+            mappings.append(
+                mapping
             )
 
         return mappings
