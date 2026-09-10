@@ -3,15 +3,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import urllib.request
 
 from abc import (
     ABC,
     abstractmethod,
-)
-
-from typing import (
-    Any,
-    Dict,
 )
 
 from tenacity import (
@@ -21,41 +17,31 @@ from tenacity import (
 )
 
 
-# ==========================================================
-# BASE LLM INTERFACE
-# ==========================================================
-
-
 class LLMProvider(ABC):
 
     @abstractmethod
     def json_completion(
         self,
-        system_prompt: str,
-        user_payload: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        system_prompt,
+        payload,
+    ):
 
         raise NotImplementedError
 
 
-# ==========================================================
-# JSON RESPONSE PARSER
-# ==========================================================
-
-
 def parse_json_response(
-    content: str,
-) -> Dict[str, Any]:
+    content,
+):
 
     if not content:
 
         raise ValueError(
-            "LLM returned an empty response."
+            "LLM returned empty content."
         )
 
-    content = content.strip()
-
-    # Remove Markdown JSON fences if returned.
+    content = (
+        content.strip()
+    )
 
     content = re.sub(
         r"^```(?:json)?\s*",
@@ -78,15 +64,12 @@ def parse_json_response(
 
     except json.JSONDecodeError:
 
-        # Some models may include additional
-        # text around the JSON.
-
-        start = content.find(
-            "{"
+        start = (
+            content.find("{")
         )
 
-        end = content.rfind(
-            "}"
+        end = (
+            content.rfind("}")
         )
 
         if (
@@ -94,22 +77,243 @@ def parse_json_response(
             and end > start
         ):
 
-            candidate = (
-                content[
-                    start:end + 1
-                ]
-            )
-
             return json.loads(
-                candidate
+                content[
+                    start:
+                    end + 1
+                ]
             )
 
         raise
 
 
-# ==========================================================
+# =========================================================
+# OLLAMA
+# =========================================================
+
+
+class OllamaProvider(
+    LLMProvider
+):
+
+    def __init__(
+        self,
+        config,
+    ):
+
+        provider = (
+            config["ollama"]
+        )
+
+        self.model = (
+            provider["model"]
+        )
+
+        self.base_url = (
+            provider.get(
+                "base_url",
+                "http://localhost:11434",
+            )
+            .rstrip("/")
+        )
+
+        self.timeout = (
+            config.get(
+                "timeout",
+                600,
+            )
+        )
+
+        self.temperature = (
+            config.get(
+                "temperature",
+                0.0,
+            )
+        )
+
+        self.max_tokens = (
+            config.get(
+                "max_tokens",
+                2048,
+            )
+        )
+
+        self.max_input_chars = (
+            config.get(
+                "max_input_chars",
+                24000,
+            )
+        )
+
+        self.keep_alive = (
+            provider.get(
+                "keep_alive",
+                "10m",
+            )
+        )
+
+        self.num_ctx = (
+            provider.get(
+                "num_ctx",
+                16384,
+            )
+        )
+
+    @retry(
+        stop=stop_after_attempt(2),
+
+        wait=wait_exponential(
+            min=1,
+            max=4,
+        ),
+    )
+    def json_completion(
+        self,
+        system_prompt,
+        payload,
+    ):
+
+        user_text = (
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+            )
+        )
+
+        # ---------------------------------------------
+        # INPUT SIZE GUARD
+        # ---------------------------------------------
+
+        if (
+            len(user_text)
+            > self.max_input_chars
+        ):
+
+            raise ValueError(
+                "LLM request exceeds configured "
+                "input-size limit. "
+                f"Current={len(user_text)} chars, "
+                f"Limit={self.max_input_chars}. "
+                "Reduce semantic batch size or "
+                "retrieval evidence count."
+            )
+
+        request_body = {
+
+            "model":
+                self.model,
+
+            "stream":
+                False,
+
+            "format":
+                "json",
+
+            # -----------------------------------------
+            # Keep model loaded between section calls
+            # -----------------------------------------
+
+            "keep_alive":
+                self.keep_alive,
+
+            "options": {
+
+                "temperature":
+                    self.temperature,
+
+                # Lower output limit.
+                "num_predict":
+                    self.max_tokens,
+
+                "num_ctx":
+                    self.num_ctx,
+            },
+
+            "messages": [
+
+                {
+                    "role":
+                        "system",
+
+                    "content": (
+                        system_prompt
+                        + "\n"
+                        + "Return valid JSON only."
+                    ),
+                },
+
+                {
+                    "role":
+                        "user",
+
+                    "content":
+                        user_text,
+                },
+            ],
+        }
+
+        print(
+            "[LLM] "
+            f"Ollama model={self.model}, "
+            f"input_chars={len(user_text)}"
+        )
+
+        request = (
+            urllib.request.Request(
+
+                self.base_url
+                + "/api/chat",
+
+                data=(
+                    json.dumps(
+                        request_body
+                    )
+                    .encode(
+                        "utf-8"
+                    )
+                ),
+
+                headers={
+                    "Content-Type":
+                        "application/json"
+                },
+
+                method="POST",
+            )
+        )
+
+        with urllib.request.urlopen(
+            request,
+            timeout=self.timeout,
+        ) as response:
+
+            body = json.loads(
+                response
+                .read()
+                .decode(
+                    "utf-8"
+                )
+            )
+
+        content = (
+            body.get(
+                "message",
+                {}
+            )
+            .get(
+                "content",
+                "",
+            )
+        )
+
+        return parse_json_response(
+            content
+        )
+
+
+# =========================================================
 # HUGGING FACE
-# ==========================================================
+# =========================================================
 
 
 class HuggingFaceProvider(
@@ -118,27 +322,21 @@ class HuggingFaceProvider(
 
     def __init__(
         self,
-        config: dict,
+        config,
     ):
 
         from huggingface_hub import (
             InferenceClient,
         )
 
-        provider_config = (
+        provider = (
             config[
                 "huggingface"
             ]
         )
 
-        self.model = (
-            provider_config[
-                "model"
-            ]
-        )
-
         token_env = (
-            provider_config.get(
+            provider.get(
                 "api_key_env",
                 "HF_TOKEN",
             )
@@ -151,9 +349,19 @@ class HuggingFaceProvider(
         if not token:
 
             raise RuntimeError(
-                f"Environment variable "
                 f"{token_env} is not set."
             )
+
+        self.model = (
+            provider["model"]
+        )
+
+        self.max_tokens = (
+            config.get(
+                "max_tokens",
+                2048,
+            )
+        )
 
         self.temperature = (
             config.get(
@@ -162,19 +370,13 @@ class HuggingFaceProvider(
             )
         )
 
-        self.max_tokens = (
-            config.get(
-                "max_tokens",
-                8192,
-            )
-        )
-
         self.client = (
             InferenceClient(
+
                 model=self.model,
 
                 provider=(
-                    provider_config.get(
+                    provider.get(
                         "inference_provider",
                         "auto",
                     )
@@ -185,40 +387,29 @@ class HuggingFaceProvider(
                 timeout=(
                     config.get(
                         "timeout",
-                        180,
+                        600,
                     )
                 ),
             )
         )
 
-    @retry(
-        stop=stop_after_attempt(3),
-
-        wait=wait_exponential(
-            min=1,
-            max=8,
-        ),
-    )
     def json_completion(
         self,
         system_prompt,
-        user_payload,
+        payload,
     ):
 
         response = (
             self.client
             .chat_completion(
+
                 messages=[
                     {
                         "role":
                             "system",
 
-                        "content": (
-                            system_prompt
-                            + "\n"
-                            + "Return valid JSON only. "
-                            + "Do not use Markdown."
-                        ),
+                        "content":
+                            system_prompt,
                     },
 
                     {
@@ -227,7 +418,7 @@ class HuggingFaceProvider(
 
                         "content":
                             json.dumps(
-                                user_payload,
+                                payload,
                                 ensure_ascii=False,
                             ),
                     },
@@ -251,9 +442,9 @@ class HuggingFaceProvider(
         )
 
 
-# ==========================================================
+# =========================================================
 # OPENAI
-# ==========================================================
+# =========================================================
 
 
 class OpenAIProvider(
@@ -262,19 +453,17 @@ class OpenAIProvider(
 
     def __init__(
         self,
-        config: dict,
+        config,
     ):
 
         from openai import OpenAI
 
-        provider_config = (
-            config[
-                "openai"
-            ]
+        provider = (
+            config["openai"]
         )
 
         token_env = (
-            provider_config.get(
+            provider.get(
                 "api_key_env",
                 "OPENAI_API_KEY",
             )
@@ -287,14 +476,41 @@ class OpenAIProvider(
         if not token:
 
             raise RuntimeError(
-                f"Environment variable "
                 f"{token_env} is not set."
             )
 
+        kwargs = {
+            "api_key":
+                token
+        }
+
+        if provider.get(
+            "base_url"
+        ):
+
+            kwargs[
+                "base_url"
+            ] = (
+                provider[
+                    "base_url"
+                ]
+            )
+
+        self.client = (
+            OpenAI(
+                **kwargs
+            )
+        )
+
         self.model = (
-            provider_config[
-                "model"
-            ]
+            provider["model"]
+        )
+
+        self.max_tokens = (
+            config.get(
+                "max_tokens",
+                2048,
+            )
         )
 
         self.temperature = (
@@ -304,48 +520,10 @@ class OpenAIProvider(
             )
         )
 
-        self.max_tokens = (
-            config.get(
-                "max_tokens",
-                8192,
-            )
-        )
-
-        kwargs = {
-            "api_key":
-                token
-        }
-
-        base_url = (
-            provider_config.get(
-                "base_url"
-            )
-        )
-
-        if base_url:
-
-            kwargs[
-                "base_url"
-            ] = base_url
-
-        self.client = (
-            OpenAI(
-                **kwargs
-            )
-        )
-
-    @retry(
-        stop=stop_after_attempt(3),
-
-        wait=wait_exponential(
-            min=1,
-            max=8,
-        ),
-    )
     def json_completion(
         self,
         system_prompt,
-        user_payload,
+        payload,
     ):
 
         response = (
@@ -353,6 +531,7 @@ class OpenAIProvider(
             .chat
             .completions
             .create(
+
                 model=self.model,
 
                 messages=[
@@ -360,11 +539,8 @@ class OpenAIProvider(
                         "role":
                             "system",
 
-                        "content": (
-                            system_prompt
-                            + "\n"
-                            + "Return valid JSON only."
-                        ),
+                        "content":
+                            system_prompt,
                     },
 
                     {
@@ -373,7 +549,7 @@ class OpenAIProvider(
 
                         "content":
                             json.dumps(
-                                user_payload,
+                                payload,
                                 ensure_ascii=False,
                             ),
                     },
@@ -402,9 +578,9 @@ class OpenAIProvider(
         )
 
 
-# ==========================================================
+# =========================================================
 # ANTHROPIC
-# ==========================================================
+# =========================================================
 
 
 class AnthropicProvider(
@@ -413,19 +589,19 @@ class AnthropicProvider(
 
     def __init__(
         self,
-        config: dict,
+        config,
     ):
 
         import anthropic
 
-        provider_config = (
+        provider = (
             config[
                 "anthropic"
             ]
         )
 
         token_env = (
-            provider_config.get(
+            provider.get(
                 "api_key_env",
                 "ANTHROPIC_API_KEY",
             )
@@ -438,14 +614,24 @@ class AnthropicProvider(
         if not token:
 
             raise RuntimeError(
-                f"Environment variable "
                 f"{token_env} is not set."
             )
 
+        self.client = (
+            anthropic.Anthropic(
+                api_key=token
+            )
+        )
+
         self.model = (
-            provider_config[
-                "model"
-            ]
+            provider["model"]
+        )
+
+        self.max_tokens = (
+            config.get(
+                "max_tokens",
+                2048,
+            )
         )
 
         self.temperature = (
@@ -455,44 +641,21 @@ class AnthropicProvider(
             )
         )
 
-        self.max_tokens = (
-            config.get(
-                "max_tokens",
-                8192,
-            )
-        )
-
-        self.client = (
-            anthropic.Anthropic(
-                api_key=token
-            )
-        )
-
-    @retry(
-        stop=stop_after_attempt(3),
-
-        wait=wait_exponential(
-            min=1,
-            max=8,
-        ),
-    )
     def json_completion(
         self,
         system_prompt,
-        user_payload,
+        payload,
     ):
 
         response = (
             self.client
             .messages
             .create(
+
                 model=self.model,
 
                 system=(
                     system_prompt
-                    + "\n"
-                    + "Return valid JSON only. "
-                    + "Do not use Markdown."
                 ),
 
                 messages=[
@@ -502,7 +665,7 @@ class AnthropicProvider(
 
                         "content":
                             json.dumps(
-                                user_payload,
+                                payload,
                                 ensure_ascii=False,
                             ),
                     }
@@ -519,6 +682,7 @@ class AnthropicProvider(
         )
 
         content = "".join(
+
             block.text
 
             for block
@@ -535,211 +699,17 @@ class AnthropicProvider(
         )
 
 
-# ==========================================================
-# OLLAMA
-# ==========================================================
-
-
-class OllamaProvider(
-    LLMProvider
-):
-
-    """
-    Local or self-hosted Ollama LLM provider.
-
-    The configured model must already be available
-    to the Ollama server.
-
-    Example:
-
-        ollama pull qwen3:8b
-
-    Ollama API:
-
-        http://localhost:11434/api/chat
-    """
-
-    def __init__(
-        self,
-        config: dict,
-    ):
-
-        import urllib.request
-
-        provider_config = (
-            config[
-                "ollama"
-            ]
-        )
-
-        self.model = (
-            provider_config[
-                "model"
-            ]
-        )
-
-        self.base_url = (
-            provider_config.get(
-                "base_url",
-                "http://localhost:11434",
-            )
-            .rstrip("/")
-        )
-
-        self.temperature = (
-            config.get(
-                "temperature",
-                0.0,
-            )
-        )
-
-        self.timeout = (
-            config.get(
-                "timeout",
-                180,
-            )
-        )
-
-        self._urlopen = (
-            urllib.request.urlopen
-        )
-
-        self._Request = (
-            urllib.request.Request
-        )
-
-    @retry(
-        stop=stop_after_attempt(3),
-
-        wait=wait_exponential(
-            min=1,
-            max=8,
-        ),
-    )
-    def json_completion(
-        self,
-        system_prompt,
-        user_payload,
-    ):
-
-        payload = {
-
-            "model":
-                self.model,
-
-            # Do not stream because the pipeline
-            # expects one complete JSON response.
-
-            "stream":
-                False,
-
-            # Ask Ollama to enforce JSON output.
-
-            "format":
-                "json",
-
-            "options": {
-
-                "temperature":
-                    self.temperature
-            },
-
-            "messages": [
-
-                {
-                    "role":
-                        "system",
-
-                    "content": (
-                        system_prompt
-                        + "\n"
-                        + "Return valid JSON only. "
-                        + "Do not use Markdown."
-                    ),
-                },
-
-                {
-                    "role":
-                        "user",
-
-                    "content":
-                        json.dumps(
-                            user_payload,
-                            ensure_ascii=False,
-                        ),
-                },
-            ],
-        }
-
-        request = (
-            self._Request(
-
-                self.base_url
-                + "/api/chat",
-
-                data=(
-                    json.dumps(
-                        payload
-                    )
-                    .encode(
-                        "utf-8"
-                    )
-                ),
-
-                headers={
-                    "Content-Type":
-                        "application/json"
-                },
-
-                method="POST",
-            )
-        )
-
-        with self._urlopen(
-            request,
-
-            timeout=(
-                self.timeout
-            ),
-
-        ) as response:
-
-            body = json.loads(
-                response
-                .read()
-                .decode(
-                    "utf-8"
-                )
-            )
-
-        content = (
-            body
-            .get(
-                "message",
-                {}
-            )
-            .get(
-                "content",
-                "",
-            )
-        )
-
-        return parse_json_response(
-            content
-        )
-
-
-# ==========================================================
-# LLM FACTORY
-# ==========================================================
+# =========================================================
+# FACTORY
+# =========================================================
 
 
 class LLMFactory:
 
     @staticmethod
     def create(
-        config: dict,
-    ) -> LLMProvider:
+        config,
+    ):
 
         provider = (
             config.get(
@@ -750,42 +720,31 @@ class LLMFactory:
             .lower()
         )
 
+        if provider == "ollama":
+
+            return OllamaProvider(
+                config
+            )
+
         if provider == "huggingface":
 
-            return (
-                HuggingFaceProvider(
-                    config
-                )
+            return HuggingFaceProvider(
+                config
             )
 
         if provider == "openai":
 
-            return (
-                OpenAIProvider(
-                    config
-                )
+            return OpenAIProvider(
+                config
             )
 
         if provider == "anthropic":
 
-            return (
-                AnthropicProvider(
-                    config
-                )
-            )
-
-        if provider == "ollama":
-
-            return (
-                OllamaProvider(
-                    config
-                )
+            return AnthropicProvider(
+                config
             )
 
         raise ValueError(
-            "Unsupported LLM provider: "
-            f"{provider}. "
-            "Supported providers are: "
-            "huggingface, openai, "
-            "anthropic and ollama."
+            "Unsupported provider: "
+            f"{provider}"
         )
