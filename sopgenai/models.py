@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import (
-    BaseModel,
-    Field,
-)
+from pydantic import BaseModel, Field
 
 
 class BBox(BaseModel):
@@ -21,13 +18,10 @@ class TextRun(BaseModel):
     text: str
 
     font: Optional[str] = None
-
     size: Optional[float] = None
-
     color: Optional[str] = None
 
     bold: bool = False
-
     italic: bool = False
 
     bbox: Optional[BBox] = None
@@ -39,7 +33,7 @@ class Element(BaseModel):
 
     type: str
 
-    page: int
+    page: int = 0
 
     order: int
 
@@ -70,14 +64,22 @@ class Section(BaseModel):
 
     level: int = 1
 
-    elements: List[str] = Field(
+    order: int = 0
+
+    heading_element_id: Optional[str] = None
+
+    element_ids: List[str] = Field(
         default_factory=list
     )
+
+    # Template instruction/body text belonging
+    # to the section.
+    text: str = ""
 
 
 class CanonicalDocument(BaseModel):
 
-    schema_version: str = "3.0"
+    schema_version: str = "6.0"
 
     document_id: str
 
@@ -131,30 +133,13 @@ class KnowledgeUnit(BaseModel):
     )
 
 
-class RetrievedEvidence(BaseModel):
-
-    score: float
-
-    knowledge_unit_id: str
-
-    document_id: str
-
-    document_type: str
-
-    authority: int
-
-    text: str
-
-    source_element_ids: List[str] = Field(
-        default_factory=list
-    )
-
-
 class Mapping(BaseModel):
 
     target_id: str
 
     target_heading: str
+
+    target_level: int = 1
 
     source_element_ids: List[str] = Field(
         default_factory=list
